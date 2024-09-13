@@ -809,7 +809,7 @@ public class Zab1_0Test extends ZKTestCase {
     }
 
     @Test
-    public void testNormalFollowerRun_ProcessCommitInSyncAfterAckNewLeader(@TempDir File testData) throws Exception {
+    public void testNormalFollowerRun_ProcessCommitInSyncAfterAckNewLeader() throws Exception {
         testFollowerConversation(new FollowerConversation() {
             @Override
             public void converseWithFollower(InputArchive ia, OutputArchive oa, Follower f) throws Exception {
@@ -939,7 +939,7 @@ public class Zab1_0Test extends ZKTestCase {
                 boa.writeRecord(sdt, null);
                 qp.setData(baos.toByteArray());
             }
-        }, testData);
+        });
     }
 
     @Test
