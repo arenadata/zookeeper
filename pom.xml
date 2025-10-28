@@ -1023,6 +1023,19 @@
             <exclude>**/tests/zoo.cfg</exclude>
             <exclude>**/tests/wrappers-mt.opt</exclude>
             <exclude>**/c-doc.Doxyfile</exclude>
+            <!-- autotools/libtool helper scripts and generated build files -->
+            <exclude>**/autom4te.cache/**</exclude>
+            <exclude>**/aclocal.m4</exclude>
+            <exclude>**/compile</exclude>
+            <exclude>**/config.guess</exclude>
+            <exclude>**/config.sub</exclude>
+            <exclude>**/configure</exclude>
+            <exclude>**/depcomp</exclude>
+            <exclude>**/install-sh</exclude>
+            <exclude>**/ltmain.sh</exclude>
+            <exclude>**/missing</exclude>
+            <exclude>**/Makefile.in</exclude>
+            <exclude>**/config.h.in</exclude>
           </excludes>
           <consoleOutput>true</consoleOutput>
         </configuration>
