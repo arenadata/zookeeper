@@ -21,18 +21,18 @@ import static org.apache.zookeeper.server.auth.IPAuthenticationProvider.USE_X_FO
 import static org.apache.zookeeper.server.auth.IPAuthenticationProvider.X_FORWARDED_FOR_HEADER_NAME;
 import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.fail;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import java.util.stream.Stream;
 import javax.servlet.http.HttpServletRequest;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -41,13 +41,13 @@ public class IPAuthenticationProviderTest {
 
   private HttpServletRequest request;
 
-  @Before
+  @BeforeEach
   public void setUp() throws Exception {
     System.clearProperty(USE_X_FORWARDED_FOR_KEY);
     request = mock(HttpServletRequest.class);
   }
 
-  @After
+  @AfterEach
   public void tearDown() {
     System.clearProperty(USE_X_FORWARDED_FOR_KEY);
   }

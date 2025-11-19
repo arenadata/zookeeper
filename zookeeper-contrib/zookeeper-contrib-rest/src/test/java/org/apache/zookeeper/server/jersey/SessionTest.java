@@ -29,8 +29,10 @@ import org.apache.zookeeper.ZooKeeper;
 import org.apache.zookeeper.data.Stat;
 import org.apache.zookeeper.server.jersey.jaxb.ZSession;
 import org.codehaus.jettison.json.JSONException;
-import org.junit.Assert;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.jersey.api.client.Client;
 import com.sun.jersey.api.client.ClientResponse;
@@ -50,7 +52,7 @@ public class SessionTest extends Base {
         Builder b = wr.accept(MediaType.APPLICATION_JSON);
 
         ClientResponse cr = b.post(ClientResponse.class, null);
-        Assert.assertEquals(ClientResponse.Status.CREATED, cr
+        assertEquals(ClientResponse.Status.CREATED, cr
                 .getClientResponseStatus());
 
         return cr.getEntity(ZSession.class);
@@ -59,10 +61,10 @@ public class SessionTest extends Base {
     @Test
     public void testCreateNewSession() throws JSONException {
         ZSession session = createSession();
-        Assert.assertEquals(session.id.length(), 36);
+        assertEquals(session.id.length(), 36);
 
         // use out-of-band method to verify
-        Assert.assertTrue(ZooKeeperService.isConnected(CONTEXT_PATH, session.id));
+        assertTrue(ZooKeeperService.isConnected(CONTEXT_PATH, session.id));
     }
 
     @Test
@@ -70,11 +72,11 @@ public class SessionTest extends Base {
         ZSession session = createSession("1");
 
         // use out-of-band method to verify
-        Assert.assertTrue(ZooKeeperService.isConnected(CONTEXT_PATH, session.id));
+        assertTrue(ZooKeeperService.isConnected(CONTEXT_PATH, session.id));
 
         // wait for the session to be closed
         Thread.sleep(1500);
-        Assert.assertFalse(ZooKeeperService.isConnected(CONTEXT_PATH, session.id));
+        assertFalse(ZooKeeperService.isConnected(CONTEXT_PATH, session.id));
     }
 
     @Test
@@ -84,12 +86,12 @@ public class SessionTest extends Base {
         WebResource wr = sessionsr.path(session.id);
         Builder b = wr.accept(MediaType.APPLICATION_JSON);
 
-        Assert.assertTrue(ZooKeeperService.isConnected(CONTEXT_PATH, session.id));
+        assertTrue(ZooKeeperService.isConnected(CONTEXT_PATH, session.id));
         ClientResponse cr = b.delete(ClientResponse.class, null);
-        Assert.assertEquals(ClientResponse.Status.NO_CONTENT,
+        assertEquals(ClientResponse.Status.NO_CONTENT,
                 cr.getClientResponseStatus());
 
-        Assert.assertFalse(ZooKeeperService.isConnected(CONTEXT_PATH, session.id));
+        assertFalse(ZooKeeperService.isConnected(CONTEXT_PATH, session.id));
     }
     
     @Test
@@ -101,13 +103,13 @@ public class SessionTest extends Base {
         Builder b = wr.accept(MediaType.APPLICATION_JSON);
         
         ClientResponse cr = b.put(ClientResponse.class, null);
-        Assert.assertEquals(ClientResponse.Status.OK, cr.getClientResponseStatus());
+        assertEquals(ClientResponse.Status.OK, cr.getClientResponseStatus());
         
         Thread.sleep(1500);
-        Assert.assertTrue(ZooKeeperService.isConnected(CONTEXT_PATH, session.id));
+        assertTrue(ZooKeeperService.isConnected(CONTEXT_PATH, session.id));
         
         Thread.sleep(1000);
-        Assert.assertFalse(ZooKeeperService.isConnected(CONTEXT_PATH, session.id));
+        assertFalse(ZooKeeperService.isConnected(CONTEXT_PATH, session.id));
     }
     
     @Test
@@ -124,12 +126,12 @@ public class SessionTest extends Base {
         
         Builder b = wr.accept(MediaType.APPLICATION_JSON);
         ClientResponse cr = b.post(ClientResponse.class);
-        Assert.assertEquals(ClientResponse.Status.CREATED, cr.getClientResponseStatus());
+        assertEquals(ClientResponse.Status.CREATED, cr.getClientResponseStatus());
         
         Stat stat = new Stat();
         zk.getData("/ephemeral-test", false, stat);
         
         ZooKeeper sessionZK = ZooKeeperService.getClient(CONTEXT_PATH, session.id);
-        Assert.assertEquals(stat.getEphemeralOwner(), sessionZK.getSessionId());
+        assertEquals(stat.getEphemeralOwner(), sessionZK.getSessionId());
     }
 }

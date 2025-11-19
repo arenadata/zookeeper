@@ -18,23 +18,22 @@
 
 package org.apache.zookeeper.server.jersey;
 
-import org.junit.AfterClass;
-import org.junit.BeforeClass;
-import org.junit.runner.RunWith;
-import org.junit.runners.Suite;
-import org.junit.runners.Suite.SuiteClasses;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.platform.suite.api.SelectClasses;
+import org.junit.platform.suite.api.Suite;
 
-@RunWith(Suite.class)
-@SuiteClasses({WadlTest.class, GetTest.class, GetChildrenTest.class,
+@Suite
+@SelectClasses({WadlTest.class, GetTest.class, GetChildrenTest.class,
     CreateTest.class, SetTest.class, ExistsTest.class, DeleteTest.class })
 public class RestTestSuite {
 
-    @BeforeClass
+    @BeforeAll
     public static void setUp() {
         // suite setup
     }
 
-    @AfterClass
+    @AfterAll
     public static void tearDown() {
         // suite setup
     }

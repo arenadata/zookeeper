@@ -28,9 +28,9 @@ import org.apache.zookeeper.ZooKeeper;
 import org.apache.zookeeper.ZooDefs.Ids;
 import org.apache.zookeeper.server.jersey.SetTest.MyWatcher;
 import org.apache.zookeeper.server.jersey.cfg.RestCfg;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.runner.RunWith;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 import com.sun.jersey.api.client.Client;
 import com.sun.jersey.api.client.WebResource;
@@ -39,7 +39,7 @@ import com.sun.jersey.api.client.WebResource;
  * Test stand-alone server.
  * 
  */
-@RunWith(JUnit4ZKTestRunner.class)
+@ExtendWith(JUnit4ZKTestRunner.class)
 public class Base {
    protected static final Logger LOG = LoggerFactory.getLogger(Base.class);
 
@@ -55,7 +55,7 @@ public class Base {
 
    private RestMain rest;
 
-   @Before
+   @BeforeEach
    public void setUp() throws Exception {
        RestCfg cfg = new RestCfg(new ByteArrayInputStream(String.format(
                "rest.port=%s\n" + 
@@ -72,7 +72,7 @@ public class Base {
        sessionsr = client.resource(BASEURI).path("sessions/v1/");
    }
 
-   @After
+   @AfterEach
    public void tearDown() throws Exception {
        client.destroy();
        zk.close();

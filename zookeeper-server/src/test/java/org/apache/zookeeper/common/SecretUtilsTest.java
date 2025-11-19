@@ -25,7 +25,7 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Path;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -58,7 +58,7 @@ public class SecretUtilsTest {
         final String pathToFile = "NonExistingFile";
         final IllegalStateException exception =
                 assertThrows(IllegalStateException.class, () -> SecretUtils.readSecret(pathToFile));
-        assertEquals("Exception occurred while reading secret from file " + pathToFile, exception.getMessage());
+        assertEquals("Exception occurred when reading secret from file " + pathToFile, exception.getMessage());
     }
 
     public static Path createSecretFile(final String secretTxt) throws IOException {

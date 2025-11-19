@@ -18,12 +18,14 @@
 
 package org.apache.zookeeper.test;
 
-import org.junit.runners.Suite;
+import org.junit.platform.suite.api.SelectClasses;
+import org.junit.platform.suite.api.Suite;
 
 /**
  * Run tests with: Nio Client against Netty server
  */
-@Suite.SuiteClasses({AsyncHammerTest.class})
+@Suite
+@SelectClasses({AsyncHammerTest.class})
 public class NioNettySuiteHammerTest extends NioNettySuiteBase {
 
 }

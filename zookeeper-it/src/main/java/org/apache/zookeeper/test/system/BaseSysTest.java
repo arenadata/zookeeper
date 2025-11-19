@@ -32,12 +32,11 @@ import org.apache.zookeeper.Watcher;
 import org.apache.zookeeper.ZooKeeper;
 import org.apache.zookeeper.server.quorum.QuorumPeer;
 import org.apache.zookeeper.server.quorum.QuorumPeer.QuorumServer;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Ignore;
-import org.junit.runner.JUnitCore;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
 
-@Ignore("No tests in this class.")
+@Disabled("No tests in this class.")
 public class BaseSysTest {
     private static final File testData = new File(
             System.getProperty("test.data.dir", "src/test/resources/data"));
@@ -53,14 +52,14 @@ public class BaseSysTest {
         }
     }
     InstanceManager im;
-    @Before
+    @BeforeEach
     public void setUp() throws Exception {
         if (!fakeMachines) {
             zk = new ZooKeeper(zkHostPort, 15000, new Watcher() {public void process(WatchedEvent e){}});
             im = new InstanceManager(zk, prefix);
         }
     }
-    @After
+    @AfterEach
     public void tearDown() throws Exception {
         if (null != im) {
             im.close();
@@ -274,7 +273,4 @@ public class BaseSysTest {
         fakeBaseClients[index].stop();
     }
     
-    static public void main(String args[]) {
-        JUnitCore.main(args);
-    }
 }

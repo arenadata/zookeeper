@@ -23,7 +23,7 @@
   <parent>
     <groupId>org.apache.zookeeper</groupId>
     <artifactId>zookeeper-contrib</artifactId>
-    <version>3.9.5</version>
+    <version>3.9.5.1-4.3.0-0</version>
   </parent>
 
   <artifactId>zookeeper-contrib-zooinspector</artifactId>
@@ -35,7 +35,7 @@
 
   <properties>
     <rat.version>0.6</rat.version>
-    <guava.version>18.0</guava.version>
+    <guava.version>33.4.0-jre</guava.version>
   </properties>
 
   <build>
@@ -96,8 +96,8 @@
       <optional>true</optional>
     </dependency>
     <dependency>
-      <groupId>org.junit.vintage</groupId>
-      <artifactId>junit-vintage-engine</artifactId>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter-api</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>

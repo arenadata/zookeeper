@@ -18,8 +18,8 @@
 package org.apache.zookeeper;
 
 import static org.apache.zookeeper.test.ClientBase.CONNECTION_TIMEOUT;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.fail;
 import java.io.File;
 import java.io.IOException;
 import java.util.HashMap;
@@ -32,9 +32,9 @@ import org.apache.zookeeper.server.ServerConfig;
 import org.apache.zookeeper.server.ZooKeeperServerMain;
 import org.apache.zookeeper.server.quorum.QuorumPeerTestBase;
 import org.apache.zookeeper.test.ClientBase;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -43,7 +43,7 @@ public class EnforceAuthenticationTest extends QuorumPeerTestBase {
     private Servers servers;
     private int clientPort;
 
-    @Before
+    @BeforeEach
     public void setUp() {
         System.setProperty("zookeeper.admin.enableServer", "false");
         System.setProperty("zookeeper.4lw.commands.whitelist", "*");
@@ -51,7 +51,7 @@ public class EnforceAuthenticationTest extends QuorumPeerTestBase {
         System.clearProperty(AuthenticationHelper.ENFORCE_AUTH_SCHEMES);
     }
 
-    @After
+    @AfterEach
     public void tearDown() throws InterruptedException {
         if (servers != null) {
             servers.shutDownAllServers();

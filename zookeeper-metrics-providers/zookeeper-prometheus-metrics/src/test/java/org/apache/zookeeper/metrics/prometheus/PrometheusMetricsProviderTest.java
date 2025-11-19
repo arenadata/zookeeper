@@ -56,7 +56,6 @@ import org.apache.zookeeper.server.util.QuotaMetricsUtils;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
 import org.hamcrest.CoreMatchers;
-import org.junit.Assert;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -416,7 +415,7 @@ public class PrometheusMetricsProviderTest {
         HttpURLConnection conn = (HttpURLConnection) new URL(metricsUrl).openConnection();
         conn.setRequestMethod("TRACE");
         conn.connect();
-        Assert.assertEquals(HttpURLConnection.HTTP_FORBIDDEN, conn.getResponseCode());
+        assertEquals(HttpURLConnection.HTTP_FORBIDDEN, conn.getResponseCode());
     }
 
     @Test

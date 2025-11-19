@@ -23,8 +23,8 @@ import org.apache.zookeeper.common.PathUtils;
 import org.apache.zookeeper.data.Stat;
 import org.apache.zookeeper.inspector.encryption.BasicDataEncryptionManager;
 import org.apache.zookeeper.retry.ZooKeeperRetry;
-import org.junit.Assert;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
@@ -48,7 +48,7 @@ public class ZooInspectorManagerImplTest {
         ZooInspectorManagerImpl manager = getInspectorManagerImpl(mockedZk);
 
         boolean createSuccess = manager.createNode("/", "test");
-        Assert.assertTrue(createSuccess);
+        assertTrue(createSuccess);
     }
 
     /**
@@ -66,7 +66,7 @@ public class ZooInspectorManagerImplTest {
         ZooInspectorManagerImpl manager = getInspectorManagerImpl(mockedZk);
 
         boolean createSuccess = manager.createNode("/parent", "test");
-        Assert.assertTrue(createSuccess);
+        assertTrue(createSuccess);
     }
 
 

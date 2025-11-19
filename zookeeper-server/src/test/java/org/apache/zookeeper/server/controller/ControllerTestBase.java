@@ -22,8 +22,8 @@ import java.io.File;
 import java.util.List;
 import java.util.concurrent.TimeoutException;
 import org.apache.zookeeper.ZKTestCase;
-import org.junit.After;
-import org.junit.Before;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.io.TempDir;
 
 public class ControllerTestBase extends ZKTestCase {
@@ -32,7 +32,7 @@ public class ControllerTestBase extends ZKTestCase {
     protected CommandClient commandClient;
     protected ControllerServerConfig config;
 
-    @Before
+    @BeforeEach
     public void init(@TempDir File tempDir) throws Exception {
         List<Integer> openPorts = ControllerConfigTest.findNAvailablePorts(2);
 
@@ -55,7 +55,7 @@ public class ControllerTestBase extends ZKTestCase {
         commandClient = new CommandClient(config.getControllerAddress().getPort());
     }
 
-    @After
+    @AfterEach
     public void cleanup() throws InterruptedException {
         if (controllerService != null) {
             controllerService.shutdown();

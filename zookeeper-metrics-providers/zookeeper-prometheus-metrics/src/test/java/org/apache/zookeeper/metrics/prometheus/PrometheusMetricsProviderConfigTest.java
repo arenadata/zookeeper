@@ -18,18 +18,18 @@
 
 package org.apache.zookeeper.metrics.prometheus;
 
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import io.prometheus.client.CollectorRegistry;
 import java.util.Properties;
 import org.apache.zookeeper.metrics.MetricsProviderLifeCycleException;
-import org.junit.Assert;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 
 public class PrometheusMetricsProviderConfigTest {
 
     @Test
     public void testInvalidPort() {
-        Assert.assertThrows(MetricsProviderLifeCycleException.class, () -> {
+        assertThrows(MetricsProviderLifeCycleException.class, () -> {
             CollectorRegistry.defaultRegistry.clear();
             PrometheusMetricsProvider provider = new PrometheusMetricsProvider();
             Properties configuration = new Properties();
@@ -42,7 +42,7 @@ public class PrometheusMetricsProviderConfigTest {
 
     @Test
     public void testInvalidAddr() {
-        Assert.assertThrows(MetricsProviderLifeCycleException.class, () -> {
+        assertThrows(MetricsProviderLifeCycleException.class, () -> {
             CollectorRegistry.defaultRegistry.clear();
             PrometheusMetricsProvider provider = new PrometheusMetricsProvider();
             Properties configuration = new Properties();

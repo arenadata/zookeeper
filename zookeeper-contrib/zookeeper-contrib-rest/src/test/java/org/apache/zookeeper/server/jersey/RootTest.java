@@ -26,8 +26,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.zookeeper.data.Stat;
 import org.apache.zookeeper.server.jersey.jaxb.ZPath;
-import org.junit.Assert;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.jersey.api.client.ClientResponse;
 import com.sun.jersey.api.client.WebResource;
@@ -52,15 +53,15 @@ public class RootTest extends Base {
 
         ClientResponse cr;
         cr = builder.post(ClientResponse.class, data);
-        Assert.assertEquals(ClientResponse.Status.CREATED, cr.getClientResponseStatus());
+        assertEquals(ClientResponse.Status.CREATED, cr.getClientResponseStatus());
 
         ZPath zpath = cr.getEntity(ZPath.class);
-        Assert.assertEquals(new ZPath(path + name), zpath);
-        Assert.assertEquals(znodesr.path(path).toString(), zpath.uri);
+        assertEquals(new ZPath(path + name), zpath);
+        assertEquals(znodesr.path(path).toString(), zpath.uri);
 
         // use out-of-band method to verify
         byte[] rdata = zk.getData(zpath.path, false, new Stat());
-        Assert.assertTrue(new String(rdata) + " == " + new String(data),
-                Arrays.equals(rdata, data));
+        assertTrue(Arrays.equals(rdata, data),
+                new String(rdata) + " == " + new String(data));
     }
 }

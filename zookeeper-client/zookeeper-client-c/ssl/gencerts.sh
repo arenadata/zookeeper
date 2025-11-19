@@ -38,13 +38,14 @@ FQDN=${FQDN:-"zookeeper.apache.org"}
 openssl genrsa -out rootkey.pem 2048
 
 #Generate the root Cert
-openssl req -x509 -new -key rootkey.pem -out root.crt -config <(
+openssl req -x509 -new -key rootkey.pem -out root.crt -days 3650 -config <(
 cat <<-EOF
 [ req ]
 default_bits = 2048
 prompt = no
 default_md = sha256
 distinguished_name = dn
+x509_extensions = v3_ca
 
 [ dn ]
 C = US
@@ -53,6 +54,10 @@ L = San Francisco
 O = ZooKeeper
 emailAddress = dev@$FQDN
 CN = $FQDN
+
+[ v3_ca ]
+basicConstraints = critical, CA:TRUE
+keyUsage = critical, keyCertSign, cRLSign
 EOF
 )
 

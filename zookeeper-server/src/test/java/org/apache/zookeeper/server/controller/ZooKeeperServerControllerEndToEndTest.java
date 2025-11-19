@@ -18,6 +18,11 @@
 
 package org.apache.zookeeper.server.controller;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 import java.io.IOException;
 import java.util.LinkedList;
 import java.util.concurrent.CountDownLatch;
@@ -30,10 +35,9 @@ import org.apache.zookeeper.WatchedEvent;
 import org.apache.zookeeper.Watcher;
 import org.apache.zookeeper.ZooDefs;
 import org.apache.zookeeper.ZooKeeper;
-import org.junit.After;
-import org.junit.Assert;
-import org.junit.Ignore;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -43,7 +47,7 @@ public class ZooKeeperServerControllerEndToEndTest extends ControllerTestBase {
     private static final String AnyPath = "/Any";
     private static final byte[] AnyData = new byte[] {0x0, 0x1};
 
-    @After
+    @AfterEach
     @Override
     public void cleanup() throws InterruptedException {
         if (zkClient != null) {
@@ -79,7 +83,7 @@ public class ZooKeeperServerControllerEndToEndTest extends ControllerTestBase {
                         Watcher.Event.KeeperState.Disconnected,
                         Watcher.Event.KeeperState.SyncConnected
                 });
-        Assert.assertTrue(commandClient
+        assertTrue(commandClient
                 .trySendCommand(ControlCommand.Action.CLOSECONNECTION, String.valueOf(zkClient.getSessionId())));
         watcher.waitForEvent();
     }
@@ -99,7 +103,7 @@ public class ZooKeeperServerControllerEndToEndTest extends ControllerTestBase {
                         Watcher.Event.KeeperState.Disconnected,
                         Watcher.Event.KeeperState.Expired
                 });
-        Assert.assertTrue(commandClient
+        assertTrue(commandClient
                 .trySendCommand(ControlCommand.Action.EXPIRESESSION, String.valueOf(zkClient.getSessionId())));
         watcher.waitForEvent();
     }
@@ -115,29 +119,29 @@ public class ZooKeeperServerControllerEndToEndTest extends ControllerTestBase {
         BlockingPathWatcher pathWatcher = new BlockingPathWatcher(AnyPath, Watcher.Event.EventType.NodeCreated);
 
         zkClient.exists(AnyPath, pathWatcher);
-        Assert.assertEquals(AnyPath,
+        assertEquals(AnyPath,
                 zkClient.create(AnyPath, AnyData, ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL));
         pathWatcher.waitForEvent();
 
         // Force expire all sessions.
         stateWatcher.reset(Watcher.Event.KeeperState.Expired);
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.EXPIRESESSION));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.EXPIRESESSION));
         stateWatcher.waitForEvent();
     }
 
-    @Ignore
+    @Disabled
     public void verifyRejectAcceptSessions() throws Exception {
         // Tell the server to reject new requests.
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.REJECTCONNECTIONS));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.REJECTCONNECTIONS));
         EventWaiter watcher = new BlockingStateWatcher(Watcher.Event.KeeperState.SyncConnected);
         initClient(watcher);
         try {
             watcher.waitForEvent(100);
-            Assert.fail("should have failed connecting");
+            fail("should have failed connecting");
         } catch (TimeoutException ex) {
         }
         // Now accept requests. We should get a connection quickly.
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.RESET));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.RESET));
         watcher.waitForEvent();
     }
 
@@ -156,13 +160,13 @@ public class ZooKeeperServerControllerEndToEndTest extends ControllerTestBase {
         timedTransaction();
 
         // Add 200 ms of delay to each response.
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.ADDDELAY, String.valueOf(200)));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.ADDDELAY, String.valueOf(200)));
         long delayedDuration = timedTransaction();
 
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.RESET));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.RESET));
         long resetDuration = timedTransaction();
 
-        Assert.assertTrue(delayedDuration - resetDuration > 200);
+        assertTrue(delayedDuration - resetDuration > 200);
     }
 
     @Test
@@ -173,23 +177,23 @@ public class ZooKeeperServerControllerEndToEndTest extends ControllerTestBase {
         stateWatcher.waitForEvent();
 
         // Step 2: Tell the server to fail requests.
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.FAILREQUESTS));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.FAILREQUESTS));
 
         try {
             zkClient.exists(AnyPath, null);
-            Assert.fail("should have failed");
+            fail("should have failed");
         } catch (KeeperException ex) {
         }
 
         // 2nd should fail: we haven't reset.
         try {
             zkClient.exists(AnyPath, null);
-            Assert.fail("should still fail");
+            fail("should still fail");
         } catch (KeeperException ex) {
         }
 
         // Reset; future requests should succeed.
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.RESET));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.RESET));
 
         zkClient.exists(AnyPath, null);
     }
@@ -202,11 +206,11 @@ public class ZooKeeperServerControllerEndToEndTest extends ControllerTestBase {
         stateWatcher.waitForEvent();
 
         // Step 2: Tell the server to fail 1 request.
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.FAILREQUESTS, "1"));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.FAILREQUESTS, "1"));
 
         try {
             zkClient.exists(AnyPath, null);
-            Assert.fail("should have failed");
+            fail("should have failed");
         } catch (KeeperException ex) {
         }
 
@@ -222,22 +226,22 @@ public class ZooKeeperServerControllerEndToEndTest extends ControllerTestBase {
         watcher.waitForEvent();
 
         // No data yet.
-        Assert.assertNull(zkClient.exists(AnyPath, null));
+        assertNull(zkClient.exists(AnyPath, null));
 
         // Step 2: Tell the server to eat responses...nom...nom...nom....
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.NORESPONSE));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.NORESPONSE));
 
         try {
             BlockingPathWatcher pathWatcher = new BlockingPathWatcher(AnyPath, Watcher.Event.EventType.NodeCreated);
             // This async call should succeed in setting the data, but never send a response.
             zkClient.create(AnyPath, AnyData, ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL, pathWatcher, null);
             pathWatcher.waitForEvent(500);
-            Assert.fail("should time out since the event should never come");
+            fail("should time out since the event should never come");
         } catch (TimeoutException ex) {
         }
 
         // Re-enable responses.
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.RESET));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.RESET));
         watcher.reset(Watcher.Event.KeeperState.SyncConnected);
 
         try {
@@ -245,15 +249,15 @@ public class ZooKeeperServerControllerEndToEndTest extends ControllerTestBase {
             // the transaction id (xid). This should terminate the connection and
             // throw a KeeperException.
             zkClient.exists(AnyPath, false);
-            Assert.fail("should have failed with bad xid");
+            fail("should have failed with bad xid");
         } catch (KeeperException ex) {
             // The client believes it has fallen behind so deems this a connection loss.
-            Assert.assertTrue(ex instanceof KeeperException.ConnectionLossException);
+            assertTrue(ex instanceof KeeperException.ConnectionLossException);
         }
 
         // The client should reconnect and be healthy after this.
         watcher.waitForEvent();
-        Assert.assertNotNull(zkClient.exists(AnyPath, false));
+        assertNotNull(zkClient.exists(AnyPath, false));
     }
 
     /**

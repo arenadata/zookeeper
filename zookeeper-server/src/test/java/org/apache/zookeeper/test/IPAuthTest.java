@@ -25,18 +25,18 @@ import java.util.List;
 import javax.servlet.http.HttpServletRequest;
 import org.apache.zookeeper.data.Id;
 import org.apache.zookeeper.server.auth.IPAuthenticationProvider;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
 public class IPAuthTest {
-    @Before
+    @BeforeEach
     public void setUp() {
         System.setProperty(IPAuthenticationProvider.USE_X_FORWARDED_FOR_KEY, "true");
     }
 
-    @After
+    @AfterEach
     public void tearDown() {
         System.clearProperty(IPAuthenticationProvider.USE_X_FORWARDED_FOR_KEY);
     }

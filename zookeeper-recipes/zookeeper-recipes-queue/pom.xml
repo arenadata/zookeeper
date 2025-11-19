@@ -23,7 +23,7 @@
   <parent>
     <groupId>org.apache.zookeeper</groupId>
     <artifactId>zookeeper-recipes</artifactId>
-    <version>3.9.5</version>
+    <version>3.9.5.1-4.3.0-0</version>
   </parent>
 
   <artifactId>zookeeper-recipes-queue</artifactId>
@@ -37,6 +37,14 @@
     This recipe does not handle KeeperException.ConnectionLossException or ZCONNECTIONLOSS.
     It will only work correctly once ZOOKEEPER-22 https://issues.apache.org/jira/browse/ZOOKEEPER-22 is resolved.
   </description>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.hamcrest</groupId>
+      <artifactId>hamcrest-library</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
 
   <build>
     <plugins>

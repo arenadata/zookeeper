@@ -29,7 +29,7 @@ import org.apache.jute.OutputArchive;
 import org.apache.zookeeper.server.persistence.FileTxnSnapLog;
 import org.apache.zookeeper.test.ClientBase;
 import org.apache.zookeeper.txn.TxnHeader;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 

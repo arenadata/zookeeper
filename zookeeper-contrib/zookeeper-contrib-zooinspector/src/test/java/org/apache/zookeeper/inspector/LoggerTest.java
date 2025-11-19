@@ -17,8 +17,8 @@
  */
 package org.apache.zookeeper.inspector;
 
-import org.junit.Assert;
-import org.junit.Test;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -43,6 +43,6 @@ public class LoggerTest {
         String bufferMessage = new String(byteArrayOutputStream.toByteArray(), StandardCharsets.UTF_8);
         LOG.info(bufferMessage);
 
-        Assert.assertTrue(bufferMessage.contains(testMessage));
+        assertTrue(bufferMessage.contains(testMessage));
     }
 }

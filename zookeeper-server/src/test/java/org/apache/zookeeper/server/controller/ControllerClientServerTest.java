@@ -18,88 +18,89 @@
 
 package org.apache.zookeeper.server.controller;
 
-import org.junit.Assert;
-import org.junit.Test;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.Test;
 
 public class ControllerClientServerTest extends ControllerTestBase {
     @Test
     public void verifyPingCommand() {
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.PING));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.PING));
     }
 
     @Test
     public void verifyCloseConnectionCommand() {
         // Valid long session ids should be accepted.
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.CLOSECONNECTION, "0x1234"));
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.CLOSECONNECTION, "1234"));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.CLOSECONNECTION, "0x1234"));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.CLOSECONNECTION, "1234"));
 
         // Invalid session id format should fail.
-        Assert.assertFalse(commandClient.trySendCommand(ControlCommand.Action.CLOSECONNECTION, "hanm"));
+        assertFalse(commandClient.trySendCommand(ControlCommand.Action.CLOSECONNECTION, "hanm"));
 
         // No parameter should be accepted.
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.CLOSECONNECTION));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.CLOSECONNECTION));
     }
 
     @Test
     public void verifyExpireSessionCommand() {
         // Valid long session ids should be accepted.
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.EXPIRESESSION, "0x1234"));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.EXPIRESESSION, "0x1234"));
 
         // Invalid session id format should fail.
-        Assert.assertFalse(commandClient.trySendCommand(ControlCommand.Action.EXPIRESESSION, "hanm"));
+        assertFalse(commandClient.trySendCommand(ControlCommand.Action.EXPIRESESSION, "hanm"));
 
         // No parameter should be accepted.
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.EXPIRESESSION));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.EXPIRESESSION));
     }
 
     @Test
     public void verifyAddResetDelayCommands() {
         // Valid longs should be parsed.
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.ADDDELAY, "0x1234"));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.ADDDELAY, "0x1234"));
 
         // Invalid longs should fail.
-        Assert.assertFalse(commandClient.trySendCommand(ControlCommand.Action.ADDDELAY, "hanm"));
+        assertFalse(commandClient.trySendCommand(ControlCommand.Action.ADDDELAY, "hanm"));
 
         // No parameter should be accepted.
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.ADDDELAY));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.ADDDELAY));
 
         // Reset delay should work.
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.RESET));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.RESET));
     }
 
     @Test
     public void verifyBadResponseCommands() {
         // Valid longs should be parsed.
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.FAILREQUESTS, "0x1234"));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.FAILREQUESTS, "0x1234"));
 
         // Invalid longs should fail.
-        Assert.assertFalse(commandClient.trySendCommand(ControlCommand.Action.FAILREQUESTS, "hanm"));
+        assertFalse(commandClient.trySendCommand(ControlCommand.Action.FAILREQUESTS, "hanm"));
 
         // No parameter should be accepted.
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.FAILREQUESTS));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.FAILREQUESTS));
 
         // Reset should work.
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.RESET));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.RESET));
     }
 
     @Test
     public void verifyEatResponseCommands() {
         // Valid longs should be parsed.
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.NORESPONSE, "0x1234"));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.NORESPONSE, "0x1234"));
 
         // Invalid longs should fail.
-        Assert.assertFalse(commandClient.trySendCommand(ControlCommand.Action.NORESPONSE, "hanm"));
+        assertFalse(commandClient.trySendCommand(ControlCommand.Action.NORESPONSE, "hanm"));
 
         // No parameter should be accepted.
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.NORESPONSE));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.NORESPONSE));
 
         // Reset should work.
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.RESET));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.RESET));
     }
 
     @Test
     public void verifyLeaderElectionCommand() {
-        Assert.assertTrue(commandClient.trySendCommand(ControlCommand.Action.ELECTNEWLEADER));
+        assertTrue(commandClient.trySendCommand(ControlCommand.Action.ELECTNEWLEADER));
     }
 
 }
