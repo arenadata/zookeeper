@@ -573,7 +573,7 @@
     <enforcer.version>3.0.0-M3</enforcer.version>
     <commons-io.version>2.17.0</commons-io.version>
     <burningwave.mockdns.version>0.25.4</burningwave.mockdns.version>
-    <clover-maven-plugin.version>4.4.1</clover-maven-plugin.version>
+    <clover-maven-plugin.version>4.5.2</clover-maven-plugin.version>
     <sonar-maven-plugin.version>3.7.0.1746</sonar-maven-plugin.version>
 
     <!-- parameters to pass to C client build -->
@@ -875,7 +875,7 @@
         <plugin>
           <groupId>com.github.spotbugs</groupId>
           <artifactId>spotbugs-maven-plugin</artifactId>
-          <version>4.0.0</version>
+          <version>4.9.8.1</version>
           <configuration>
             <excludeFilterFile>excludeFindBugsFilter.xml</excludeFilterFile>
           </configuration>

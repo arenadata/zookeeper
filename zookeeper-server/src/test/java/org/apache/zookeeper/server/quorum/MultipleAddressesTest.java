@@ -21,7 +21,6 @@ package org.apache.zookeeper.server.quorum;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -37,6 +36,8 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.zookeeper.PortAssignment;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
 public class MultipleAddressesTest {
@@ -107,12 +108,19 @@ public class MultipleAddressesTest {
     }
 
     @Test
-    public void testGetValidAddressWithNotValid() {
-        assertThrows(NoRouteToHostException.class, () -> {
-            // IP chosen because it is reserved for documentation/examples and should be unreachable (RFC 5737)
-            MultipleAddresses multipleAddresses = new MultipleAddresses(new InetSocketAddress("203.0.113.1", 22));
+    public void testGetValidAddressWithNotValid() throws Exception {
+        // IP chosen because it is reserved for documentation/examples and should be unreachable (RFC 5737)
+        InetSocketAddress addr = new InetSocketAddress("203.0.113.1", 22);
+        MultipleAddresses multipleAddresses = new MultipleAddresses(addr);
+
+        try {
             multipleAddresses.getReachableAddress();
-        });
+            Assumptions.assumeTrue(false,
+                    "203.0.113.1:22 is reachable in this environment, skipping test");
+        } catch (NoRouteToHostException expected) {
+            // expected: 203.0.113.1:22 should be unreachable in normal environments
+            Assertions.assertNotNull(expected);
+        }
     }
 
     @Test
