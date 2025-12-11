@@ -23,7 +23,7 @@
   <parent>
     <groupId>io.arenadata.zookeeper</groupId>
     <artifactId>zookeeper-recipes</artifactId>
-    <version>3.8.4</version>
+    <version>3.8.4.2-3.9.1-2</version>
   </parent>
 
   <artifactId>zookeeper-recipes-lock</artifactId>
