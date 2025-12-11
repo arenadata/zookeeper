@@ -27,7 +27,7 @@
     <relativePath />
     <!-- no parent resolution -->
   </parent>
-  <groupId>org.apache.zookeeper</groupId>
+  <groupId>io.arenadata.zookeeper</groupId>
   <artifactId>parent</artifactId>
   <packaging>pom</packaging>
   <!-- to change version: mvn -B release:update-versions -DdevelopmentVersion=3.6.0-SNAPSHOT -->
@@ -66,6 +66,21 @@
     <module>zookeeper-assembly</module>
     <module>zookeeper-compatibility-tests</module>
   </modules>
+
+  <repositories>
+    <repository>
+      <id>github</id>
+      <url>https://maven.pkg.github.com/arenadata/*</url>
+    </repository>
+  </repositories>
+
+  <distributionManagement>
+    <repository>
+      <id>github</id>
+      <name>GitHub Packages</name>
+      <url>https://maven.pkg.github.com/arenadata/zookeeper</url>
+    </repository>
+  </distributionManagement>
 
   <scm>
     <connection>scm:git:https://gitbox.apache.org/repos/asf/zookeeper.git</connection>
