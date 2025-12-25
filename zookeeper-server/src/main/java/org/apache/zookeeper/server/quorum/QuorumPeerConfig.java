@@ -121,6 +121,8 @@ public class QuorumPeerConfig {
     protected String quorumLearnerLoginContext = QuorumAuth.QUORUM_LEARNER_SASL_LOGIN_CONTEXT_DFAULT_VALUE;
     protected String quorumServerLoginContext = QuorumAuth.QUORUM_SERVER_SASL_LOGIN_CONTEXT_DFAULT_VALUE;
     protected int quorumCnxnThreadsSize;
+    protected boolean quorumSaslAuthzZnodeEnabled = false;
+    protected String quorumSaslAuthzZnodePath = "";
 
     // multi address related configs
     private boolean multiAddressEnabled = Boolean.parseBoolean(
@@ -362,6 +364,16 @@ public class QuorumPeerConfig {
                 quorumServerLoginContext = value;
             } else if (key.equals(QuorumAuth.QUORUM_KERBEROS_SERVICE_PRINCIPAL)) {
                 quorumServicePrincipal = value;
+            } else if (key.equals(QuorumAuth.QUORUM_SASL_AUTHZ_ZNODE_ENABLED)) {
+                quorumSaslAuthzZnodeEnabled = parseBoolean(key, value);
+                if (quorumSaslAuthzZnodeEnabled && quorumSaslAuthzZnodePath.trim().isEmpty()) {
+                    quorumSaslAuthzZnodePath = QuorumAuth.QUORUM_SASL_AUTHZ_ZNODE_DEFAULT_PATH;
+                }
+            } else if (key.equals(QuorumAuth.QUORUM_SASL_AUTHZ_ZNODE_PATH)) {
+                quorumSaslAuthzZnodePath = value;
+                if (!quorumSaslAuthzZnodePath.trim().isEmpty()) {
+                    quorumSaslAuthzZnodeEnabled = true;
+                }
             } else if (key.equals("quorum.cnxn.threads.size")) {
                 quorumCnxnThreadsSize = Integer.parseInt(value);
             } else if (key.equals(JvmPauseMonitor.INFO_THRESHOLD_KEY)) {

@@ -21,22 +21,27 @@ package org.apache.zookeeper.server.quorum;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
+import org.apache.jute.Record;
 import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.MultiOperationRecord;
 import org.apache.zookeeper.Op;
 import org.apache.zookeeper.ZooDefs.OpCode;
+import org.apache.zookeeper.data.Stat;
 import org.apache.zookeeper.metrics.MetricsContext;
 import org.apache.zookeeper.proto.CreateRequest;
 import org.apache.zookeeper.server.ByteBufferInputStream;
+import org.apache.zookeeper.server.DataTree.ProcessTxnResult;
 import org.apache.zookeeper.server.Request;
 import org.apache.zookeeper.server.ServerMetrics;
 import org.apache.zookeeper.server.ZKDatabase;
 import org.apache.zookeeper.server.ZooKeeperServer;
 import org.apache.zookeeper.server.persistence.FileTxnSnapLog;
+import org.apache.zookeeper.txn.TxnHeader;
 
 /**
  * Abstract base class for all ZooKeeperServers that participate in
@@ -52,6 +57,18 @@ public abstract class QuorumZooKeeperServer extends ZooKeeperServer {
         super(logFactory, tickTime, minSessionTimeout, maxSessionTimeout, listenBacklog, zkDb, self.getInitialConfig(),
               self.isReconfigEnabled());
         this.self = self;
+    }
+
+    @Override
+    public synchronized void startup() {
+        super.startup();
+        refreshAuthzHostsFromZnode();
+    }
+
+    @Override
+    public synchronized void startupWithoutServing() {
+        super.startupWithoutServing();
+        refreshAuthzHostsFromZnode();
     }
 
     @Override
@@ -218,6 +235,113 @@ public abstract class QuorumZooKeeperServer extends ZooKeeperServer {
     public void dumpMonitorValues(BiConsumer<String, Object> response) {
         super.dumpMonitorValues(response);
         response.accept("peer_state", self.getDetailedPeerState());
+    }
+
+    @Override
+    public ProcessTxnResult processTxn(TxnHeader hdr, Record txn) {
+        ProcessTxnResult rc = super.processTxn(hdr, txn);
+        maybeRefreshAuthzHostsFromTxn(rc);
+        return rc;
+    }
+
+    @Override
+    public ProcessTxnResult processTxn(Request request) {
+        ProcessTxnResult rc = super.processTxn(request);
+        maybeRefreshAuthzHostsFromTxn(rc);
+        return rc;
+    }
+
+    private void maybeRefreshAuthzHostsFromTxn(ProcessTxnResult rc) {
+        if (rc == null) {
+            return;
+        }
+        if (!self.isQuorumSaslAuthEnabled()) {
+            return;
+        }
+        String znodePath = self.getQuorumSaslAuthzZnodePath();
+        if (znodePath == null || znodePath.isEmpty()) {
+            return;
+        }
+
+        if (rc.multiResult != null) {
+            for (ProcessTxnResult sub : rc.multiResult) {
+                if (isAuthzZnodeTxn(sub, znodePath)) {
+                    if (sub.type == OpCode.delete) {
+                        clearAuthzHostsFromZnode();
+                    } else {
+                        refreshAuthzHostsFromZnode();
+                    }
+                    return;
+                }
+            }
+            return;
+        }
+
+        if (rc.path != null && rc.path.contains("quorumAuthzHosts")) {
+            LOG.info("Authz znode candidate txn: type={}, path={}, expected={}", rc.type, rc.path, znodePath);
+        }
+        if (isAuthzZnodeTxn(rc, znodePath)) {
+            LOG.info("Authz znode txn applied: type={}, path={}", rc.type, rc.path);
+            if (rc.type == OpCode.delete) {
+                clearAuthzHostsFromZnode();
+            } else {
+                refreshAuthzHostsFromZnode();
+            }
+        }
+    }
+
+    private static boolean isAuthzZnodeTxn(ProcessTxnResult rc, String znodePath) {
+        if (rc == null || rc.path == null) {
+            return false;
+        }
+        if (!znodePath.equals(rc.path)) {
+            return false;
+        }
+        return rc.type == OpCode.create
+               || rc.type == OpCode.create2
+               || rc.type == OpCode.createContainer
+               || rc.type == OpCode.setData
+               || rc.type == OpCode.delete;
+    }
+
+    private void refreshAuthzHostsFromZnode() {
+        if (!self.isQuorumSaslAuthEnabled()) {
+            return;
+        }
+        String path = self.getQuorumSaslAuthzZnodePath();
+        if (path == null || path.isEmpty()) {
+            return;
+        }
+        try {
+            byte[] data = getZKDatabase().getDataTree().getData(path, new Stat(), null);
+            if (data == null) {
+                LOG.info("Authz znode read returned null data for {}", path);
+                return;
+            }
+            if (data.length == 0) {
+                LOG.info("Authz znode read returned empty data for {}", path);
+                self.clearManualSaslAuthzHosts();
+            } else {
+                LOG.info("Authz znode read {} bytes for {}", data.length, path);
+                self.setManualSaslAuthzHosts(new String(data, StandardCharsets.UTF_8));
+            }
+        } catch (KeeperException.NoNodeException e) {
+            LOG.info("Authz znode missing at {}", path);
+            return;
+        } catch (Exception e) {
+            LOG.warn("Failed to refresh quorum SASL authz hosts from znode {}", path, e);
+            return;
+        }
+
+        self.refreshQuorumSaslAuthzHosts();
+    }
+
+    private void clearAuthzHostsFromZnode() {
+        if (!self.isQuorumSaslAuthEnabled()) {
+            return;
+        }
+        self.clearManualSaslAuthzHosts();
+        self.refreshQuorumSaslAuthzHosts();
     }
 
 }

@@ -23,6 +23,7 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.Socket;
+import java.util.Objects;
 import java.util.Set;
 import javax.security.auth.login.AppConfigurationEntry;
 import javax.security.auth.login.Configuration;
@@ -45,6 +46,7 @@ public class SaslQuorumAuthServer implements QuorumAuthServer {
     private static final int MAX_RETRIES = 5;
     private final Login serverLogin;
     private final boolean quorumRequireSasl;
+    private final SaslQuorumServerCallbackHandler saslServerCallbackHandler;
 
     public SaslQuorumAuthServer(boolean quorumRequireSasl, String loginContext, Set<String> authzHosts) throws SaslException {
         this.quorumRequireSasl = quorumRequireSasl;
@@ -55,12 +57,18 @@ public class SaslQuorumAuthServer implements QuorumAuthServer {
                     "SASL-authentication failed because the specified JAAS configuration section '%s' could not be found.",
                     loginContext));
             }
-            SaslQuorumServerCallbackHandler saslServerCallbackHandler = new SaslQuorumServerCallbackHandler(
+            saslServerCallbackHandler = new SaslQuorumServerCallbackHandler(
                 Configuration.getConfiguration(), loginContext, authzHosts);
             serverLogin = new Login(loginContext, saslServerCallbackHandler, new ZKConfig());
             serverLogin.startThreadIfNeeded();
         } catch (Throwable e) {
             throw new SaslException("Failed to initialize authentication mechanism using SASL", e);
+        }
+    }
+
+    public void updateAuthorizedHosts(Set<String> authzHosts) {
+        if (!Objects.isNull(authzHosts)) {
+            saslServerCallbackHandler.setAuthorizedHosts(authzHosts);
         }
     }
 

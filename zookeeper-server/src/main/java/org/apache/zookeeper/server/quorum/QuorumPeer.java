@@ -39,6 +39,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Properties;
@@ -789,6 +790,11 @@ public class QuorumPeer extends ZooKeeperThread implements QuorumStats.Provider 
      * pool which will be used to initiate quorum server connections.
      */
     protected int quorumCnxnThreadsSize = QUORUM_CNXN_THREADS_SIZE_DEFAULT_VALUE;
+
+    private boolean quorumSaslAuthzZnodeEnabled = false;
+    private String quorumSaslAuthzZnodePath = QuorumAuth.QUORUM_SASL_AUTHZ_ZNODE_DEFAULT_PATH;
+    private final AtomicReference<Set<String>> manualSaslAuthzHosts =
+        new AtomicReference<>(Collections.emptySet());
 
     public static final String QUORUM_CNXN_TIMEOUT_MS = "zookeeper.quorumCnxnTimeoutMs";
     private static int quorumCnxnTimeoutMs;
@@ -1887,6 +1893,40 @@ public class QuorumPeer extends ZooKeeperThread implements QuorumStats.Provider 
         }
     }
 
+    public void refreshQuorumSaslAuthzHosts(QuorumVerifier... extraQVs) {
+        if (!(authServer instanceof SaslQuorumAuthServer)) {
+            return;
+        }
+
+        Set<String> hosts = new HashSet<>();
+        synchronized (QV_LOCK) {
+            addHostsFromQV(quorumVerifier, hosts);
+            addHostsFromQV(lastSeenQuorumVerifier, hosts);
+        }
+        Set<String> manualHosts = manualSaslAuthzHosts.get();
+        if (manualHosts != null) {
+            hosts.addAll(manualHosts);
+        }
+        if (extraQVs != null) {
+            for (QuorumVerifier qv : extraQVs) {
+                addHostsFromQV(qv, hosts);
+            }
+        }
+
+        ((SaslQuorumAuthServer) authServer).updateAuthorizedHosts(hosts);
+    }
+
+    private static void addHostsFromQV(QuorumVerifier qv, Set<String> hosts) {
+        if (qv == null) {
+            return;
+        }
+        for (QuorumServer qs : qv.getAllMembers().values()) {
+            if (qs != null && qs.hostname != null) {
+                hosts.add(qs.hostname);
+            }
+        }
+    }
+
     public void setLastSeenQuorumVerifier(QuorumVerifier qv, boolean writeToDisk) {
         if (!isReconfigEnabled()) {
             LOG.info("Dynamic reconfig is disabled, we don't store the last seen config.");
@@ -1916,6 +1956,7 @@ public class QuorumPeer extends ZooKeeperThread implements QuorumStats.Provider 
                     return;
                 }
                 lastSeenQuorumVerifier = qv;
+                refreshQuorumSaslAuthzHosts();
                 if (qcm != null) {
                     connectNewPeers(qcm);
                 }
@@ -1975,6 +2016,7 @@ public class QuorumPeer extends ZooKeeperThread implements QuorumStats.Provider 
                 setAddrs(qs.addr, qs.electionAddr, qs.clientAddr);
             }
             updateObserverMasterList();
+            refreshQuorumSaslAuthzHosts();
             return prevQV;
         }
     }
@@ -2574,6 +2616,55 @@ public class QuorumPeer extends ZooKeeperThread implements QuorumStats.Provider 
         LOG.info("quorum.cnxn.threads.size set to {}", quorumCnxnThreadsSize);
     }
 
+    void setQuorumSaslAuthzZnodeEnabled(boolean enabled) {
+        quorumSaslAuthzZnodeEnabled = enabled;
+    }
+
+    boolean isQuorumSaslAuthzZnodeEnabled() {
+        return quorumSaslAuthzZnodeEnabled;
+    }
+
+    void setQuorumSaslAuthzZnodePath(String path) {
+        if (path == null) {
+            return;
+        }
+        quorumSaslAuthzZnodePath = path.trim();
+    }
+
+    String getQuorumSaslAuthzZnodePath() {
+        return quorumSaslAuthzZnodePath;
+    }
+
+    void setManualSaslAuthzHosts(String hostsCsv) {
+        manualSaslAuthzHosts.set(parseAuthzHosts(hostsCsv));
+    }
+
+    void clearManualSaslAuthzHosts() {
+        manualSaslAuthzHosts.set(Collections.emptySet());
+    }
+
+    // VisibleForTesting
+    Set<String> getManualSaslAuthzHosts() {
+        return manualSaslAuthzHosts.get();
+    }
+
+    private static Set<String> parseAuthzHosts(String hostsCsv) {
+        if (hostsCsv == null) {
+            return Collections.emptySet();
+        }
+        String trimmed = hostsCsv.trim();
+        if (trimmed.isEmpty()) {
+            return Collections.emptySet();
+        }
+        Set<String> hosts = new HashSet<>();
+        for (String token : trimmed.split("[,\\s]+")) {
+            if (!token.isEmpty()) {
+                hosts.add(token.toLowerCase(Locale.ROOT));
+            }
+        }
+        return Collections.unmodifiableSet(hosts);
+    }
+
     boolean isQuorumSaslAuthEnabled() {
         return quorumSaslEnableAuth;
     }
@@ -2677,6 +2768,8 @@ public class QuorumPeer extends ZooKeeperThread implements QuorumStats.Provider 
             quorumPeer.setQuorumLearnerLoginContext(config.quorumLearnerLoginContext);
         }
         quorumPeer.setQuorumCnxnThreadsSize(config.quorumCnxnThreadsSize);
+        quorumPeer.setQuorumSaslAuthzZnodeEnabled(config.quorumSaslAuthzZnodeEnabled);
+        quorumPeer.setQuorumSaslAuthzZnodePath(config.quorumSaslAuthzZnodePath);
 
         if (config.jvmPauseMonitorToRun) {
             quorumPeer.setJvmPauseMonitor(new JvmPauseMonitor(config));
