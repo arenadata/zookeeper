@@ -15,16 +15,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#
-# This script cleans up old transaction logs and snapshots
-#
+set -e
 
-#
-# If this scripted is run out of /usr/bin or some other system bin directory
-# it should be linked to and not copied. Things like java jar files are found
-# relative to the canonical path of this script.
-#
-
+for cmd in openssl keytool; do
+    if ! command -v "$cmd" &> /dev/null; then
+        echo "ERROR: '$cmd' is required but not found in PATH" >&2
+        exit 1
+    fi
+done
 
 # determining the domain name in the certificates:
 # - use the first commandline argument, if present
@@ -53,7 +51,7 @@ ST = California
 L = San Francisco
 O = ZooKeeper
 emailAddress = dev@$FQDN
-CN = $FQDN
+CN = ZooKeeper CA
 
 [ v3_ca ]
 basicConstraints = critical, CA:TRUE
@@ -85,7 +83,7 @@ EOF
 openssl x509 -req -in client.csr -CA root.crt -CAkey rootkey.pem -CAcreateserial -days 3650 -out client.crt
 
 #Export in pkcs12 format
-openssl pkcs12 -export -in client.crt -inkey clientkey.pem -out client.pkcs12 -password pass:password
+openssl pkcs12 -export -in client.crt -inkey clientkey.pem -CAfile root.crt -chain -out client.pkcs12 -password pass:password
 
 # Import Keystore in JKS
 keytool -importkeystore -srckeystore client.pkcs12 -destkeystore client.jks -srcstoretype pkcs12 -srcstorepass password -deststorepass password
@@ -116,13 +114,10 @@ EOF
 openssl x509 -req -in server.csr -CA root.crt -CAkey rootkey.pem -CAcreateserial -days 3650 -out server.crt
 
 #Export in pkcs12 format
-openssl pkcs12 -export -in server.crt -inkey serverkey.pem -out server.pkcs12 -password pass:password
+openssl pkcs12 -export -in server.crt -inkey serverkey.pem -certfile root.crt -out server.pkcs12 -password pass:password
 
 # Import Keystore in JKS
 keytool -importkeystore -srckeystore server.pkcs12 -destkeystore server.jks -srcstoretype pkcs12 -srcstorepass password -deststorepass password
-
-
-keytool -importcert -keystore server.jks -file root.crt -storepass password -noprompt
 
 keytool -importcert -alias ca -file root.crt -keystore clienttrust.jks -storepass password -noprompt
 

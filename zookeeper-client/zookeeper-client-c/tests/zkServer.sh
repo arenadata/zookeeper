@@ -187,6 +187,11 @@ start|startClean|startRequireSASLAuth|startCleanReadOnly)
     # And there are no cppunit tests do hostname verification currently,
     # so we could set CN to arbitrary hostname for now.
     ./gencerts.sh tests.zookeeper.apache.org > ./gencerts.stdout 2> ./gencerts.stderr
+    if [ $? -ne 0 ]; then
+        echo "ERROR: gencerts.sh failed. Check ${certs_dir}/gencerts.stderr for details" >&2
+        cat "${certs_dir}/gencerts.stderr" >&2
+        exit 1
+    fi
     cd - > /dev/null
 
 
@@ -206,7 +211,7 @@ start|startClean|startRequireSASLAuth|startCleanReadOnly)
 
 
     # ===== start the server
-    java -cp "$CLASSPATH" $PROPERTIES ${main_class} ${tmp_dir}/zoo.cfg &> "${tmp_dir}/zk.log" &
+    java -cp "$CLASSPATH" $PROPERTIES ${main_class} ${tmp_dir}/zoo.cfg &>> "${tmp_dir}/zk.log" &
     pid=$!
     echo -n $! > /tmp/zk.pid
 

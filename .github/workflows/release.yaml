@@ -1,0 +1,104 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Verify tag is on release branch
+      run: |
+        BRANCHES=$(git branch -r --contains ${{ github.sha }} | grep 'origin/release/' || true)
+        if [ -z "$BRANCHES" ]; then
+          echo "Tag must be on a release/** branch. Found on:"
+          git branch -r --contains ${{ github.sha }}
+          exit 1
+        fi
+        echo "Tag is on: $BRANCHES"
+
+    - name: Verify CI passed
+      run: |
+        CONCLUSION=$(gh run list --commit ${{ github.sha }} --workflow CI --json conclusion -q '.[0].conclusion')
+        if [ -z "$CONCLUSION" ]; then
+          echo "No CI run found for this commit. Push to release/** branch first."
+          exit 1
+        fi
+        if [ "$CONCLUSION" != "success" ]; then
+          echo "CI has not passed for this commit (status: $CONCLUSION)"
+          exit 1
+        fi
+        echo "CI passed"
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - uses: actions/setup-java@v4
+      with:
+        java-version: 21
+        distribution: temurin
+        cache: maven
+
+    - name: Install C Dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y libcppunit-dev libsasl2-dev
+
+    - name: Build and Deploy to GitHub Packages
+      run: mvn -B -V -ntp -Pfull-build deploy -DskipTests
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Generate checksums
+      run: |
+        cd zookeeper-assembly/target
+        for f in apache-zookeeper-*.tar.gz; do
+          sha512sum "$f" > "${f}.sha512"
+        done
+
+    - name: Vulnerability scan (grype)
+      uses: anchore/scan-action@v6
+      with:
+        sbom: zookeeper-assembly/target/bom.json
+        fail-build: false
+        output-format: json
+        output-file: vulnerability-report.json
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        generate_release_notes: true
+        files: |
+          zookeeper-assembly/target/apache-zookeeper-*-bin.tar.gz
+          zookeeper-assembly/target/apache-zookeeper-*-bin.tar.gz.sha512
+          zookeeper-assembly/target/apache-zookeeper-*-lib.tar.gz
+          zookeeper-assembly/target/apache-zookeeper-*-lib.tar.gz.sha512
+          zookeeper-assembly/target/bom.json
+          vulnerability-report.json

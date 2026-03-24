@@ -1,0 +1,25 @@
+FROM eclipse-temurin:21-jdk-jammy
+
+ARG MAVEN_VERSION=3.9.9
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcppunit-dev \
+    libsasl2-dev \
+    libsasl2-modules \
+    libssl-dev \
+    build-essential \
+    autoconf \
+    automake \
+    libtool \
+    pkg-config \
+    git \
+    curl \
+    openssl \
+    hostname \
+    && curl -fsSL https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz \
+       | tar -xz -C /opt \
+    && ln -s /opt/apache-maven-${MAVEN_VERSION}/bin/mvn /usr/local/bin/mvn \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -m -u 1001 -s /bin/bash builder
+
+USER builder
