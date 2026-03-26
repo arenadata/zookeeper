@@ -42,6 +42,10 @@ public class QuorumAuth {
     public static final String QUORUM_SERVER_SASL_LOGIN_CONTEXT = "quorum.auth.server.saslLoginContext";
     public static final String QUORUM_SERVER_SASL_LOGIN_CONTEXT_DFAULT_VALUE = "QuorumServer";
 
+    public static final String QUORUM_SASL_AUTHZ_ZNODE_ENABLED = "quorum.auth.sasl.authzZnode.enabled";
+    public static final String QUORUM_SASL_AUTHZ_ZNODE_PATH = "quorum.auth.sasl.authzZnode.path";
+    public static final String QUORUM_SASL_AUTHZ_ZNODE_DEFAULT_PATH = "/zookeeper/quorumAuthzHosts";
+
     static final String QUORUM_SERVER_PROTOCOL_NAME = "zookeeper-quorum";
     static final String QUORUM_SERVER_SASL_DIGEST = "zk-quorum-sasl-md5";
     static final String QUORUM_AUTH_MESSAGE_TAG = "qpconnect";
