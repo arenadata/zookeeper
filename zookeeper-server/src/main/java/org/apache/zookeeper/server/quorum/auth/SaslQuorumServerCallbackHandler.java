@@ -20,8 +20,12 @@ package org.apache.zookeeper.server.quorum.auth;
 
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 import javax.security.auth.callback.Callback;
 import javax.security.auth.callback.CallbackHandler;
 import javax.security.auth.callback.NameCallback;
@@ -48,7 +52,7 @@ public class SaslQuorumServerCallbackHandler implements CallbackHandler {
     private String userName;
     private final boolean isDigestAuthn;
     private final Map<String, String> credentials;
-    private final Set<String> authzHosts;
+    private final AtomicReference<Set<String>> authzHostsRef = new AtomicReference<>(Collections.emptySet());
 
     public SaslQuorumServerCallbackHandler(
         AppConfigurationEntry[] configurationEntries,
@@ -82,8 +86,27 @@ public class SaslQuorumServerCallbackHandler implements CallbackHandler {
             this.credentials = Collections.emptyMap();
         }
 
-        // authorized host lists
-        this.authzHosts = authzHosts;
+        setAuthorizedHosts(authzHosts);
+    }
+
+    void setAuthorizedHosts(Set<String> newHosts) {
+        if (newHosts == null || newHosts.isEmpty()) {
+            authzHostsRef.set(Collections.emptySet());
+            return;
+        }
+        Set<String> normalized = Collections.unmodifiableSet(
+            newHosts.stream()
+                .filter(Objects::nonNull)
+                .map(host -> host.toLowerCase(Locale.ROOT))
+                .collect(Collectors.toSet())
+        );
+        authzHostsRef.set(normalized);
+        LOG.info("Updated quorum SASL authorized hosts: {}", normalized);
+    }
+
+    // VisibleForTesting
+    Set<String> getAuthorizedHostsForTest() {
+        return authzHostsRef.get();
     }
 
     public void handle(Callback[] callbacks) throws UnsupportedCallbackException {
@@ -137,7 +160,7 @@ public class SaslQuorumServerCallbackHandler implements CallbackHandler {
         if (!isDigestAuthn && authzFlag) {
             String[] components = authorizationID.split("[/@]");
             if (components.length == 3) {
-                authzFlag = authzHosts.contains(components[1]);
+                authzFlag = authzHostsRef.get().contains(components[1].toLowerCase(Locale.ROOT));
             } else {
                 authzFlag = false;
             }

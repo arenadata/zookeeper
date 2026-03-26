@@ -23,7 +23,9 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.Socket;
+import java.util.Collections;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import javax.security.auth.callback.CallbackHandler;
 import javax.security.auth.login.AppConfigurationEntry;
@@ -47,9 +49,11 @@ public class SaslQuorumAuthServer implements QuorumAuthServer {
     private static final int MAX_RETRIES = 5;
     private final Login serverLogin;
     private final boolean quorumRequireSasl;
+    private final AtomicReference<Set<String>> currentAuthzHosts;
 
     public SaslQuorumAuthServer(boolean quorumRequireSasl, String loginContext, Set<String> authzHosts) throws SaslException {
         this.quorumRequireSasl = quorumRequireSasl;
+        this.currentAuthzHosts = new AtomicReference<>(authzHosts != null ? authzHosts : Collections.emptySet());
         try {
             AppConfigurationEntry[] entries = Configuration.getConfiguration().getAppConfigurationEntry(loginContext);
             if (entries == null || entries.length == 0) {
@@ -58,12 +62,18 @@ public class SaslQuorumAuthServer implements QuorumAuthServer {
                     loginContext));
             }
             Supplier<CallbackHandler> callbackSupplier = () -> {
-                return new SaslQuorumServerCallbackHandler(entries, authzHosts);
+                return new SaslQuorumServerCallbackHandler(entries, currentAuthzHosts.get());
             };
             serverLogin = new Login(loginContext, callbackSupplier, new ZKConfig());
             serverLogin.startThreadIfNeeded();
         } catch (Throwable e) {
             throw new SaslException("Failed to initialize authentication mechanism using SASL", e);
+        }
+    }
+
+    public void updateAuthorizedHosts(Set<String> authzHosts) {
+        if (authzHosts != null) {
+            currentAuthzHosts.set(authzHosts);
         }
     }
 
