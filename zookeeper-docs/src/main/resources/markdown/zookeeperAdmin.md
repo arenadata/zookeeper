@@ -2233,6 +2233,8 @@ options are used to configure the [AdminServer](#sc_adminserver).
     The URL for listing and issuing commands relative to the
     root URL.  Defaults to "/commands".
 
+<a name="sc_metricsProviders"></a>
+
 ### Metrics Providers
 
 **New in 3.6.0:** The following options are used to configure metrics.
@@ -2275,7 +2277,90 @@ options are used to configure the [AdminServer](#sc_adminserver).
    **New in 3.7.1:**
    The timeout in ms for Prometheus worker threads shutdown.
    Default value is 1000ms.
-   
+
+* *metricsProvider.ssl.enabled* :
+   **New in 3.9.5.1:**
+   If this property is set to **true** the Prometheus.io exporter will serve the /metrics
+   endpoint over HTTPS instead of plain HTTP. Requires *metricsProvider.ssl.keyStore.location*
+   and a key store password to be configured.
+   Default value is false.
+
+* *metricsProvider.ssl.keyStore.location* :
+   **New in 3.9.5.1:**
+   Path to the key store containing the certificate and private key used by the HTTPS
+   /metrics endpoint. Required when *metricsProvider.ssl.enabled* is true.
+
+* *metricsProvider.ssl.keyStore.password* :
+   **New in 3.9.5.1:**
+   Password of the key store. Either this property or
+   *metricsProvider.ssl.keyStore.passwordPath* is required when
+   *metricsProvider.ssl.enabled* is true.
+
+* *metricsProvider.ssl.keyStore.passwordPath* :
+   **New in 3.9.5.1:**
+   Path to a file containing the key store password. If both this property and
+   *metricsProvider.ssl.keyStore.password* are set, the value read from the file is used.
+   This avoids storing the password directly in the configuration file.
+
+* *metricsProvider.ssl.keyStore.keyPassword* :
+   **New in 3.9.5.1:**
+   Password of the private key inside the key store, when it differs from the key store
+   password (only possible with JKS key stores). Defaults to the key store password.
+
+* *metricsProvider.ssl.keyStore.type* :
+   **New in 3.9.5.1:**
+   Type of the key store: JKS, PEM, PKCS12 or BCFKS. When not set, the type is auto-detected
+   from the file extension of the key store.
+
+* *metricsProvider.ssl.trustStore.location* :
+   **New in 3.9.5.1:**
+   Path to the trust store used to verify client certificates of the HTTPS /metrics endpoint.
+   Required when *metricsProvider.ssl.needClientAuth* is true.
+
+* *metricsProvider.ssl.trustStore.password* :
+   **New in 3.9.5.1:**
+   Password of the trust store.
+
+* *metricsProvider.ssl.trustStore.passwordPath* :
+   **New in 3.9.5.1:**
+   Path to a file containing the trust store password. If both this property and
+   *metricsProvider.ssl.trustStore.password* are set, the value read from the file is used.
+
+* *metricsProvider.ssl.trustStore.type* :
+   **New in 3.9.5.1:**
+   Type of the trust store: JKS, PEM, PKCS12 or BCFKS. When not set, the type is auto-detected
+   from the file extension of the trust store.
+
+* *metricsProvider.ssl.needClientAuth* :
+   **New in 3.9.5.1:**
+   If this property is set to **true** clients must present a certificate trusted by
+   *metricsProvider.ssl.trustStore.location* (mutual TLS).
+   Default value is false.
+
+* *metricsProvider.ssl.hostnameVerification* :
+   **New in 3.9.5.1:**
+   If this property is set to **true** Jetty's SNI host check is enabled: HTTPS requests are
+   rejected when the requested host name does not match the certificate selected via SNI.
+   It is disabled by default because Prometheus commonly scrapes by IP address or by a host
+   name that does not have to match the certificate, and such requests would be rejected with
+   "400 Invalid SNI".
+   Default value is false.
+
+* *metricsProvider.ssl.protocol* :
+   **New in 3.9.5.1:**
+   The TLS protocol used to instantiate the SSL context of the HTTPS /metrics endpoint
+   (for example "TLSv1.2"). Defaults to Jetty's default ("TLS").
+
+* *metricsProvider.ssl.enabledProtocols* :
+   **New in 3.9.5.1:**
+   Comma-separated list of TLS protocol versions accepted by the HTTPS /metrics endpoint
+   (for example "TLSv1.2,TLSv1.3"). Defaults to the protocols enabled by Jetty and the JVM.
+
+* *metricsProvider.ssl.ciphersuites* :
+   **New in 3.9.5.1:**
+   Comma-separated list of cipher suites accepted by the HTTPS /metrics endpoint.
+   Defaults to the cipher suites enabled by Jetty and the JVM.
+
 <a name="Communication+using+the+Netty+framework"></a>
 
 ### Communication using the Netty framework

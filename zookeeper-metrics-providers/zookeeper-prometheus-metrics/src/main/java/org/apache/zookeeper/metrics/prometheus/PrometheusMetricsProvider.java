@@ -23,7 +23,7 @@ import io.prometheus.client.CollectorRegistry;
 import io.prometheus.client.exporter.MetricsServlet;
 import io.prometheus.client.hotspot.DefaultExports;
 import java.io.IOException;
-import java.net.InetSocketAddress;
+import java.security.KeyStore;
 import java.util.Enumeration;
 import java.util.Objects;
 import java.util.Optional;
@@ -42,6 +42,8 @@ import java.util.function.BiConsumer;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import org.apache.zookeeper.common.SecretUtils;
+import org.apache.zookeeper.common.X509Util;
 import org.apache.zookeeper.metrics.Counter;
 import org.apache.zookeeper.metrics.CounterSet;
 import org.apache.zookeeper.metrics.Gauge;
@@ -54,10 +56,16 @@ import org.apache.zookeeper.metrics.SummarySet;
 import org.apache.zookeeper.server.RateLogger;
 import org.eclipse.jetty.security.ConstraintMapping;
 import org.eclipse.jetty.security.ConstraintSecurityHandler;
+import org.eclipse.jetty.server.HttpConfiguration;
+import org.eclipse.jetty.server.HttpConnectionFactory;
+import org.eclipse.jetty.server.SecureRequestCustomizer;
 import org.eclipse.jetty.server.Server;
+import org.eclipse.jetty.server.ServerConnector;
+import org.eclipse.jetty.server.SslConnectionFactory;
 import org.eclipse.jetty.servlet.ServletContextHandler;
 import org.eclipse.jetty.servlet.ServletHolder;
 import org.eclipse.jetty.util.security.Constraint;
+import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -102,6 +110,21 @@ public class PrometheusMetricsProvider implements MetricsProvider {
     private final RateLogger rateLogger = new RateLogger(LOG, 60 * 1000);
     private String host = "0.0.0.0";
     private int port = 7000;
+    private boolean sslEnabled = false;
+    private String keyStoreLocation;
+    private String keyStorePassword;
+    private String keyStorePasswordPath;
+    private String keyStoreKeyPassword;
+    private String keyStoreType;
+    private String trustStoreLocation;
+    private String trustStorePassword;
+    private String trustStorePasswordPath;
+    private String trustStoreType;
+    private boolean needClientAuth = false;
+    private boolean sslHostnameVerification = false;
+    private String sslProtocol;
+    private String sslEnabledProtocols;
+    private String sslCipherSuites;
     private boolean exportJvmInfo = true;
     private Server server;
     private final MetricsServletImpl servlet = new MetricsServletImpl();
@@ -113,9 +136,24 @@ public class PrometheusMetricsProvider implements MetricsProvider {
 
     @Override
     public void configure(Properties configuration) throws MetricsProviderLifeCycleException {
-        LOG.info("Initializing metrics, configuration: {}", configuration);
         this.host = configuration.getProperty("httpHost", "0.0.0.0");
         this.port = Integer.parseInt(configuration.getProperty("httpPort", "7000"));
+        this.sslEnabled = Boolean.parseBoolean(configuration.getProperty("ssl.enabled", "false"));
+        this.keyStoreLocation = configuration.getProperty("ssl.keyStore.location");
+        this.keyStorePassword = configuration.getProperty("ssl.keyStore.password");
+        this.keyStorePasswordPath = configuration.getProperty("ssl.keyStore.passwordPath");
+        this.keyStoreKeyPassword = configuration.getProperty("ssl.keyStore.keyPassword");
+        this.keyStoreType = configuration.getProperty("ssl.keyStore.type", "");
+        this.trustStoreLocation = configuration.getProperty("ssl.trustStore.location");
+        this.trustStorePassword = configuration.getProperty("ssl.trustStore.password");
+        this.trustStorePasswordPath = configuration.getProperty("ssl.trustStore.passwordPath");
+        this.trustStoreType = configuration.getProperty("ssl.trustStore.type", "");
+        this.needClientAuth = Boolean.parseBoolean(configuration.getProperty("ssl.needClientAuth", "false"));
+        this.sslHostnameVerification = Boolean.parseBoolean(
+                configuration.getProperty("ssl.hostnameVerification", "false"));
+        this.sslProtocol = configuration.getProperty("ssl.protocol");
+        this.sslEnabledProtocols = configuration.getProperty("ssl.enabledProtocols");
+        this.sslCipherSuites = configuration.getProperty("ssl.ciphersuites");
         this.exportJvmInfo = Boolean.parseBoolean(configuration.getProperty("exportJvmInfo", "true"));
         this.numWorkerThreads = Integer.parseInt(
                 configuration.getProperty(NUM_WORKER_THREADS, "1"));
@@ -123,6 +161,28 @@ public class PrometheusMetricsProvider implements MetricsProvider {
                 configuration.getProperty(MAX_QUEUE_SIZE, "1000000"));
         this.workerShutdownTimeoutMs = Long.parseLong(
                 configuration.getProperty(WORKER_SHUTDOWN_TIMEOUT_MS, "1000"));
+        if (sslEnabled) {
+            if (keyStoreLocation == null || keyStoreLocation.isEmpty()) {
+                throw new MetricsProviderLifeCycleException("ssl.keyStore.location is not configured");
+            }
+            if ((keyStorePassword == null || keyStorePassword.isEmpty())
+                    && (keyStorePasswordPath == null || keyStorePasswordPath.isEmpty())) {
+                throw new MetricsProviderLifeCycleException(
+                        "neither ssl.keyStore.password nor ssl.keyStore.passwordPath is configured");
+            }
+            if (needClientAuth && (trustStoreLocation == null || trustStoreLocation.isEmpty())) {
+                throw new MetricsProviderLifeCycleException(
+                        "ssl.needClientAuth is enabled but ssl.trustStore.location is not configured");
+            }
+        }
+        LOG.info("Initializing metrics, configuration: httpHost: {}, httpPort: {}, ssl.enabled: {},"
+                        + " ssl.needClientAuth: {}, ssl.hostnameVerification: {}, exportJvmInfo: {}",
+                this.host,
+                this.port,
+                this.sslEnabled,
+                this.needClientAuth,
+                this.sslHostnameVerification,
+                this.exportJvmInfo);
     }
 
     @Override
@@ -134,7 +194,55 @@ public class PrometheusMetricsProvider implements MetricsProvider {
             if (exportJvmInfo) {
                 DefaultExports.initialize();
             }
-            server = new Server(new InetSocketAddress(host, port));
+            server = new Server();
+            ServerConnector connector;
+            if (sslEnabled) {
+                LOG.info("SSL enabled for /metrics endpoint");
+                String resolvedKeyStorePassword = resolvePassword(keyStorePassword, keyStorePasswordPath);
+                SslContextFactory.Server sslContextFactory = new SslContextFactory.Server();
+                KeyStore keyStore = X509Util.loadKeyStore(keyStoreLocation, resolvedKeyStorePassword, keyStoreType);
+                sslContextFactory.setKeyStore(keyStore);
+                sslContextFactory.setKeyStorePassword(resolvedKeyStorePassword);
+                if (keyStoreKeyPassword != null && !keyStoreKeyPassword.isEmpty()) {
+                    sslContextFactory.setKeyManagerPassword(keyStoreKeyPassword);
+                }
+                if (trustStoreLocation != null && !trustStoreLocation.isEmpty()) {
+                    String resolvedTrustStorePassword = resolvePassword(trustStorePassword, trustStorePasswordPath);
+                    KeyStore trustStore = X509Util.loadTrustStore(trustStoreLocation, resolvedTrustStorePassword,
+                            trustStoreType);
+                    sslContextFactory.setTrustStore(trustStore);
+                    sslContextFactory.setNeedClientAuth(needClientAuth);
+                }
+                if (sslProtocol != null && !sslProtocol.isEmpty()) {
+                    sslContextFactory.setProtocol(sslProtocol);
+                }
+                if (sslEnabledProtocols != null && !sslEnabledProtocols.isEmpty()) {
+                    sslContextFactory.setIncludeProtocols(splitCsv(sslEnabledProtocols));
+                }
+                if (sslCipherSuites != null && !sslCipherSuites.isEmpty()) {
+                    sslContextFactory.setIncludeCipherSuites(splitCsv(sslCipherSuites));
+                }
+
+                SecureRequestCustomizer customizer = new SecureRequestCustomizer();
+                // disabled by default: Prometheus commonly scrapes by IP address or by a hostname
+                // that does not have to match the certificate, and such requests would be rejected
+                // with "400 Invalid SNI" by Jetty's SNI host check
+                customizer.setSniHostCheck(sslHostnameVerification);
+
+                HttpConfiguration httpsConfig = new HttpConfiguration();
+                httpsConfig.setSecureScheme("https");
+                httpsConfig.setSecurePort(port);
+                httpsConfig.addCustomizer(customizer);
+
+                connector = new ServerConnector(server,
+                        new SslConnectionFactory(sslContextFactory, "http/1.1"),
+                        new HttpConnectionFactory(httpsConfig));
+            } else {
+                connector = new ServerConnector(server, new HttpConnectionFactory(new HttpConfiguration()));
+            }
+            connector.setHost(host);
+            connector.setPort(port);
+            server.setConnectors(new ServerConnector[]{connector});
             ServletContextHandler context = new ServletContextHandler();
             context.setContextPath("/");
             constrainTraceMethod(context);
@@ -156,9 +264,33 @@ public class PrometheusMetricsProvider implements MetricsProvider {
         }
     }
 
+    /**
+     * Returns the password stored in the file at {@code passwordPath} if configured,
+     * otherwise falls back to the plain {@code password} value.
+     */
+    private static String resolvePassword(String password, String passwordPath) {
+        if (passwordPath != null && !passwordPath.isEmpty()) {
+            return String.valueOf(SecretUtils.readSecret(passwordPath));
+        }
+        return password;
+    }
+
+    private static String[] splitCsv(String value) {
+        String[] parts = value.split(",");
+        for (int i = 0; i < parts.length; i++) {
+            parts[i] = parts[i].trim();
+        }
+        return parts;
+    }
+
     // for tests
     MetricsServletImpl getServlet() {
         return servlet;
+    }
+
+    // for tests
+    int getServerPort() {
+        return ((ServerConnector) server.getConnectors()[0]).getLocalPort();
     }
 
     @Override

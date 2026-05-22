@@ -47,8 +47,34 @@ public class PrometheusMetricsProviderConfigTest {
             PrometheusMetricsProvider provider = new PrometheusMetricsProvider();
             Properties configuration = new Properties();
             configuration.setProperty("httpHost", "master");
+            configuration.setProperty("exportJvmInfo", "false");
             provider.configure(configuration);
             provider.start();
+        });
+    }
+
+    @Test
+    public void testInvalidKeystoreLocation() {
+        assertThrows(MetricsProviderLifeCycleException.class, () -> {
+            CollectorRegistry.defaultRegistry.clear();
+            PrometheusMetricsProvider provider = new PrometheusMetricsProvider();
+            Properties configuration = new Properties();
+            configuration.setProperty("ssl.enabled", "true");
+            configuration.setProperty("ssl.keyStore.location", "");
+            provider.configure(configuration);
+        });
+    }
+
+    @Test
+    public void testInvalidKeystorePassword() {
+        assertThrows(MetricsProviderLifeCycleException.class, () -> {
+            CollectorRegistry.defaultRegistry.clear();
+            PrometheusMetricsProvider provider = new PrometheusMetricsProvider();
+            Properties configuration = new Properties();
+            configuration.setProperty("ssl.enabled", "true");
+            configuration.setProperty("ssl.keyStore.location", "/tmp/key.jks");
+            configuration.setProperty("ssl.keyStore.password", "");
+            provider.configure(configuration);
         });
     }
 
@@ -59,8 +85,13 @@ public class PrometheusMetricsProviderConfigTest {
         Properties configuration = new Properties();
         configuration.setProperty("httpHost", "0.0.0.0");
         configuration.setProperty("httpPort", "0");
+        configuration.setProperty("exportJvmInfo", "false");
         provider.configure(configuration);
-        provider.start();
+        try {
+            provider.start();
+        } finally {
+            provider.stop();
+        }
     }
 
 }

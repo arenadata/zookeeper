@@ -46,6 +46,12 @@ All the metrics are included in the `ServerMetrics.java`.
 - Pre-requisites:
   - enable the `Prometheus MetricsProvider` by setting `metricsProvider.className=org.apache.zookeeper.metrics.prometheus.PrometheusMetricsProvider` in the zoo.cfg.
   - the Port is also configurable by setting `metricsProvider.httpPort`（the default value:7000）
+  - the /metrics endpoint can be served over HTTPS (optionally with mutual TLS) by setting
+    `metricsProvider.ssl.enabled=true` together with the `metricsProvider.ssl.keyStore.*` and
+    `metricsProvider.ssl.trustStore.*` properties; see the
+    [metrics providers section](zookeeperAdmin.html#sc_metricsProviders) of the Administrator's Guide
+    for the full list of SSL options. The matching Prometheus scrape configuration is
+    [`scheme: https` with a `tls_config`](https://prometheus.io/docs/prometheus/latest/configuration/configuration/#tls_config).
 - Install Prometheus:
   Go to the official website download [page](https://prometheus.io/download/), download the latest release.
   
