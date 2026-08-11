@@ -10,14 +10,6 @@ ZK_CONF="${ZK_CONF:-/etc/zookeeper/conf}"
 
 ZK_REST_JVMFLAGS="${ZK_REST_JVMFLAGS:-}"
 
-ZK_REST_JAVA_HOME="${ZK_REST_JAVA_HOME:-/usr/lib/jvm/java-arenadata-openjdk-11}"
-
-if [ -x "${ZK_REST_JAVA_HOME}/bin/java" ]; then
-
-JAVA_HOME="${ZK_REST_JAVA_HOME}"
-
-else
-
 set +u
 
 if [ -r "${ZK_CONF}/zookeeper-env.sh" ]; then
@@ -37,8 +29,6 @@ export ADH_SERVICE_NAME=ZOOKEEPER
 fi
 
 set -u
-
-fi
 
 if [ -z "${JAVA_HOME:-}" ] || [ ! -x "${JAVA_HOME}/bin/java" ]; then
 
@@ -71,4 +61,3 @@ CLASSPATH="${CLASSPATH}:${ZK_HOME}/lib/*"
 # shellcheck disable=SC2086
 
 exec "${JAVA_HOME}/bin/java" ${ZK_REST_JVMFLAGS} -cp "${CLASSPATH}" org.apache.zookeeper.server.jersey.RestMain
-
