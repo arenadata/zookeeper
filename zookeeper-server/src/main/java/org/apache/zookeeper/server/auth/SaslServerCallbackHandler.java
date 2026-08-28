@@ -19,6 +19,7 @@
 package org.apache.zookeeper.server.auth;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.Map;
 import javax.security.auth.callback.Callback;
@@ -29,8 +30,10 @@ import javax.security.auth.callback.UnsupportedCallbackException;
 import javax.security.sasl.AuthorizeCallback;
 import javax.security.sasl.RealmCallback;
 import javax.security.sasl.SaslException;
+import org.apache.zookeeper.common.Time;
 import org.apache.zookeeper.server.token.DelegationTokenIdentifier;
 import org.apache.zookeeper.server.token.DelegationTokenSecretManager;
+import org.apache.zookeeper.server.token.DelegationTokenStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -44,15 +47,21 @@ public class SaslServerCallbackHandler implements CallbackHandler {
     private String userName;
     private final Map<String, String> credentials;
     private final DelegationTokenSecretManager tokenManager;
+    private final DelegationTokenStore.EntryReader tokenStore;
     private DelegationTokenIdentifier tokenIdentifier;
+    private byte[] tokenIdentifierBytes;
 
     public SaslServerCallbackHandler(Map<String, String> credentials) {
-        this(credentials, null);
+        this(credentials, null, null);
     }
 
-    public SaslServerCallbackHandler(Map<String, String> credentials, DelegationTokenSecretManager tokenManager) {
+    public SaslServerCallbackHandler(
+        Map<String, String> credentials,
+        DelegationTokenSecretManager tokenManager,
+        DelegationTokenStore.EntryReader tokenStore) {
         this.credentials = credentials;
         this.tokenManager = tokenManager;
+        this.tokenStore = tokenStore;
     }
 
     public void handle(Callback[] callbacks) throws UnsupportedCallbackException {
@@ -71,18 +80,22 @@ public class SaslServerCallbackHandler implements CallbackHandler {
 
     private void handleNameCallback(NameCallback nc) {
         tokenIdentifier = null;
+        tokenIdentifierBytes = null;
         // a delegation token client sends base64(identifier) as the username;
         // anything that does not strictly parse falls back to the static user map.
         if (tokenManager != null) {
-            DelegationTokenIdentifier ident = tryParseToken(nc.getDefaultName());
+            byte[] decoded = tryDecodeToken(nc.getDefaultName());
+            DelegationTokenIdentifier ident = decoded == null ? null : tryParseToken(decoded);
             if (ident != null) {
                 try {
                     tokenManager.validate(ident);
+                    validateAgainstStore(ident, decoded);
                 } catch (SaslException e) {
                     LOG.warn("Rejecting delegation token: {}", e.getMessage());
                     return;
                 }
                 tokenIdentifier = ident;
+                tokenIdentifierBytes = decoded;
                 nc.setName(nc.getDefaultName());
                 userName = nc.getDefaultName();
                 return;
@@ -98,22 +111,50 @@ public class SaslServerCallbackHandler implements CallbackHandler {
     }
 
     /**
+     * Checks the token against the replicated store: the token must exist
+     * (not cancelled), match the stored identifier and not be past its
+     * current expiry. The HMAC password alone is valid until maxDate, so the
+     * store lookup is what makes cancel and renew-based expiry effective.
+     */
+    private void validateAgainstStore(DelegationTokenIdentifier ident, byte[] identifierBytes) throws SaslException {
+        if (tokenStore == null) {
+            throw new SaslException("delegation token store is not available");
+        }
+        byte[] entry = tokenStore.entry(ident.getSequenceNumber());
+        if (entry == null) {
+            throw new SaslException("delegation token for " + ident.getOwner() + " is unknown or cancelled");
+        }
+        try {
+            if (!Arrays.equals(DelegationTokenStore.entryIdentifier(entry), identifierBytes)) {
+                throw new SaslException("delegation token does not match the stored token");
+            }
+            if (Time.currentWallTime() > DelegationTokenStore.entryExpiry(entry)) {
+                throw new SaslException("delegation token for " + ident.getOwner() + " has expired");
+            }
+        } catch (IOException e) {
+            throw new SaslException("malformed delegation token store entry for " + ident.getOwner());
+        }
+    }
+
+    /**
      * Returns whether the last handled authentication was a delegation token.
      */
     public boolean isTokenAuthenticated() {
         return tokenIdentifier != null;
     }
 
-    private DelegationTokenIdentifier tryParseToken(String name) {
+    private static byte[] tryDecodeToken(String name) {
         if (name == null || name.isEmpty()) {
             return null;
         }
-        byte[] decoded;
         try {
-            decoded = Base64.getDecoder().decode(name);
+            return Base64.getDecoder().decode(name);
         } catch (IllegalArgumentException e) {
             return null;
         }
+    }
+
+    private static DelegationTokenIdentifier tryParseToken(byte[] decoded) {
         try {
             return DelegationTokenIdentifier.fromBytes(decoded);
         } catch (IOException e) {
@@ -123,7 +164,7 @@ public class SaslServerCallbackHandler implements CallbackHandler {
 
     private void handlePasswordCallback(PasswordCallback pc) {
         if (tokenIdentifier != null) {
-            byte[] password = tokenManager.computePassword(tokenIdentifier.toBytes());
+            byte[] password = tokenManager.computePassword(tokenIdentifierBytes);
             pc.setPassword(Base64.getEncoder().encodeToString(password).toCharArray());
         } else if ("super".equals(this.userName) && System.getProperty(SYSPROP_SUPER_PASSWORD) != null) {
             // superuser: use Java system property for password, if available.

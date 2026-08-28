@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 import javax.security.auth.callback.Callback;
 import javax.security.auth.callback.NameCallback;
@@ -33,6 +34,7 @@ import javax.security.auth.callback.UnsupportedCallbackException;
 import javax.security.sasl.AuthorizeCallback;
 import org.apache.zookeeper.server.token.DelegationTokenIdentifier;
 import org.apache.zookeeper.server.token.DelegationTokenSecretManager;
+import org.apache.zookeeper.server.token.DelegationTokenStore;
 import org.junit.jupiter.api.Test;
 
 public class SaslServerCallbackHandlerTest {
@@ -41,10 +43,20 @@ public class SaslServerCallbackHandlerTest {
     private static final Map<String, String> CREDENTIALS = Collections.singletonMap("bob", "bobsecret");
 
     private final DelegationTokenSecretManager tokenManager = new DelegationTokenSecretManager(KEY);
+    private final Map<Integer, byte[]> store = new HashMap<>();
+    private final DelegationTokenStore.EntryReader storeReader = store::get;
+
+    private SaslServerCallbackHandler handler() {
+        return new SaslServerCallbackHandler(CREDENTIALS, tokenManager, storeReader);
+    }
 
     private static DelegationTokenIdentifier liveToken(String owner) {
         long now = System.currentTimeMillis();
         return new DelegationTokenIdentifier(owner, "yarn", "", now, now + 3_600_000L, 1, 1);
+    }
+
+    private void putInStore(DelegationTokenIdentifier ident, long expiry) {
+        store.put(ident.getSequenceNumber(), DelegationTokenStore.encodeEntry(expiry, ident.toBytes()));
     }
 
     private static char[] runNameAndPassword(SaslServerCallbackHandler handler, String username)
@@ -55,11 +67,16 @@ public class SaslServerCallbackHandlerTest {
         return pc.getPassword();
     }
 
+    private static String tokenUsername(DelegationTokenIdentifier ident) {
+        return Base64.getEncoder().encodeToString(ident.toBytes());
+    }
+
     @Test
     public void testTokenAuthentication() throws Exception {
-        SaslServerCallbackHandler handler = new SaslServerCallbackHandler(CREDENTIALS, tokenManager);
+        SaslServerCallbackHandler handler = handler();
         DelegationTokenIdentifier ident = liveToken("alice@EXAMPLE.COM");
-        String username = Base64.getEncoder().encodeToString(ident.toBytes());
+        putInStore(ident, System.currentTimeMillis() + 3_600_000L);
+        String username = tokenUsername(ident);
 
         char[] password = runNameAndPassword(handler, username);
         char[] expected = Base64.getEncoder()
@@ -73,24 +90,44 @@ public class SaslServerCallbackHandlerTest {
     }
 
     @Test
+    public void testTokenNotInStoreRejected() throws Exception {
+        DelegationTokenIdentifier ident = liveToken("alice");
+        assertNull(runNameAndPassword(handler(), tokenUsername(ident)));
+    }
+
+    @Test
+    public void testTokenPastStoreExpiryRejected() throws Exception {
+        DelegationTokenIdentifier ident = liveToken("alice");
+        putInStore(ident, System.currentTimeMillis() - 1000L);
+        assertNull(runNameAndPassword(handler(), tokenUsername(ident)));
+    }
+
+    @Test
+    public void testTokenMismatchingStoreEntryRejected() throws Exception {
+        DelegationTokenIdentifier ident = liveToken("alice");
+        DelegationTokenIdentifier other = new DelegationTokenIdentifier(
+            "mallory", "yarn", "", ident.getIssueDate(), ident.getMaxDate(), ident.getSequenceNumber(), 1);
+        putInStore(other, System.currentTimeMillis() + 3_600_000L);
+        assertNull(runNameAndPassword(handler(), tokenUsername(ident)));
+    }
+
+    @Test
     public void testExpiredTokenRejected() throws Exception {
-        SaslServerCallbackHandler handler = new SaslServerCallbackHandler(CREDENTIALS, tokenManager);
         long now = System.currentTimeMillis();
         DelegationTokenIdentifier expired =
             new DelegationTokenIdentifier("alice", "yarn", "", now - 7_200_000L, now - 3_600_000L, 1, 1);
-        String username = Base64.getEncoder().encodeToString(expired.toBytes());
-        assertNull(runNameAndPassword(handler, username));
+        putInStore(expired, now + 3_600_000L);
+        assertNull(runNameAndPassword(handler(), tokenUsername(expired)));
     }
 
     @Test
     public void testStaticUserStillWorksWithTokenManager() throws Exception {
-        SaslServerCallbackHandler handler = new SaslServerCallbackHandler(CREDENTIALS, tokenManager);
-        assertArrayEquals("bobsecret".toCharArray(), runNameAndPassword(handler, "bob"));
+        assertArrayEquals("bobsecret".toCharArray(), runNameAndPassword(handler(), "bob"));
     }
 
     @Test
     public void testUnknownUserGetsNoPassword() throws Exception {
-        SaslServerCallbackHandler handler = new SaslServerCallbackHandler(CREDENTIALS, tokenManager);
+        SaslServerCallbackHandler handler = handler();
         assertNull(runNameAndPassword(handler, "mallory"));
         assertNull(runNameAndPassword(handler, "bm90LWEtdG9rZW4="));
     }
@@ -98,9 +135,8 @@ public class SaslServerCallbackHandlerTest {
     @Test
     public void testTokenLookingNameWithoutManagerIsStaticUser() throws Exception {
         DelegationTokenIdentifier ident = liveToken("alice");
-        String username = Base64.getEncoder().encodeToString(ident.toBytes());
         SaslServerCallbackHandler handler = new SaslServerCallbackHandler(CREDENTIALS);
-        assertNull(runNameAndPassword(handler, username));
+        assertNull(runNameAndPassword(handler, tokenUsername(ident)));
     }
 
 }

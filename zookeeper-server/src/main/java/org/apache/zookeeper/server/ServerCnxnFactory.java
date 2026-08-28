@@ -38,6 +38,7 @@ import org.apache.zookeeper.common.ZKConfig;
 import org.apache.zookeeper.jmx.MBeanRegistry;
 import org.apache.zookeeper.server.auth.SaslServerCallbackHandler;
 import org.apache.zookeeper.server.token.DelegationTokenSecretManager;
+import org.apache.zookeeper.server.token.DelegationTokenStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -275,8 +276,9 @@ public abstract class ServerCnxnFactory {
         try {
             Map<String, String> credentials = getDigestMd5Credentials(entries);
             DelegationTokenSecretManager tokenSecretManager = DelegationTokenSecretManager.createIfEnabled();
+            DelegationTokenStore.EntryReader tokenStore = tokenSecretManager == null ? null : this::readTokenStoreEntry;
             Supplier<CallbackHandler> callbackHandlerSupplier = () -> {
-                return new SaslServerCallbackHandler(credentials, tokenSecretManager);
+                return new SaslServerCallbackHandler(credentials, tokenSecretManager, tokenStore);
             };
             login = new Login(serverSection, callbackHandlerSupplier, new ZKConfig());
             setLoginUser(login.getUserName());
@@ -286,6 +288,20 @@ public abstract class ServerCnxnFactory {
                                   + " ZooKeeper server to authenticate itself properly: "
                                   + e);
         }
+    }
+
+    /**
+     * Reads a delegation token store entry from the data tree of the server
+     * attached to this factory; null while the server is not up yet or when
+     * the token is not in the store.
+     */
+    private byte[] readTokenStoreEntry(int sequenceNumber) {
+        ZooKeeperServer zks = getZooKeeperServer();
+        if (zks == null || zks.getZKDatabase() == null) {
+            return null;
+        }
+        DataNode node = zks.getZKDatabase().getDataTree().getNode(DelegationTokenStore.pathOf(sequenceNumber));
+        return node == null ? null : node.getData();
     }
 
     /**

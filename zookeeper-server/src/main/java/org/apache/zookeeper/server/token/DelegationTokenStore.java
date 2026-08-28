@@ -44,6 +44,16 @@ public final class DelegationTokenStore {
     private static final byte ENTRY_VERSION = 1;
     private static final int ENTRY_HEADER_LENGTH = 1 + 8;
 
+    /**
+     * Read access to stored token entries, keyed by the identifier sequence
+     * number; returns null when the token is not in the store.
+     */
+    public interface EntryReader {
+
+        byte[] entry(int sequenceNumber);
+
+    }
+
     private DelegationTokenStore() {
     }
 

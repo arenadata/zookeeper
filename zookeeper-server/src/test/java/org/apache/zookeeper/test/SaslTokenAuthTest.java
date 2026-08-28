@@ -18,21 +18,18 @@
 
 package org.apache.zookeeper.test;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.util.List;
 import org.apache.zookeeper.CreateMode;
+import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.ZooDefs.Ids;
 import org.apache.zookeeper.ZooKeeper;
-import org.apache.zookeeper.data.ACL;
-import org.apache.zookeeper.data.Stat;
 import org.apache.zookeeper.server.token.DelegationTokenSecretManager;
 import org.apache.zookeeper.server.token.DelegationTokenTool;
 import org.junit.jupiter.api.AfterAll;
@@ -40,14 +37,13 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 /**
- * End-to-end check of delegation token authentication: the token is minted by
- * DelegationTokenTool against a master key file, the client presents it via the
- * standard DigestLoginModule, and the server authorizes the session as the
- * token owner while static DIGEST users keep working on the same server.
+ * Authentication-path checks for delegation tokens: a token that is not in
+ * the replicated store (e.g. minted offline with the master key) must be
+ * rejected even though its HMAC is valid — this is what makes cancellation
+ * effective — while static DIGEST users keep working on the same server.
  */
 public class SaslTokenAuthTest extends SaslAuthDigestTestBase {
 
-    private static final String OWNER = "alice";
     private static final String CLIENT_SECTION_SUPER = "ClientSuper";
 
     @BeforeAll
@@ -56,11 +52,11 @@ public class SaslTokenAuthTest extends SaslAuthDigestTestBase {
         File secretFile = new File(tmpDir, "master.key");
         Files.write(secretFile.toPath(), "0123456789abcdef0123456789abcdef".getBytes(StandardCharsets.UTF_8));
 
+        // an HMAC-valid token minted outside the server, absent from the store
         ByteArrayOutputStream toolOutput = new ByteArrayOutputStream();
         DelegationTokenTool.run(new String[]{
             "--secret-file", secretFile.getAbsolutePath(),
-            "--owner", OWNER,
-            "--renewer", "yarn",
+            "--owner", "alice",
             "--max-lifetime", "1h",
         }, new PrintStream(toolOutput, true, "UTF-8"));
         String identifier = toolOutputValue(toolOutput.toString("UTF-8"), "Identifier:");
@@ -87,6 +83,7 @@ public class SaslTokenAuthTest extends SaslAuthDigestTestBase {
 
         System.setProperty(SaslTestUtil.authProviderProperty, SaslTestUtil.authProvider);
         System.setProperty(SaslTestUtil.jaasConfig, jaasFile.getAbsolutePath());
+        System.setProperty("zookeeper.allowSaslFailedClients", "true");
         System.setProperty(DelegationTokenSecretManager.TOKEN_AUTH_ENABLED, "true");
         System.setProperty(DelegationTokenSecretManager.TOKEN_AUTH_SECRET_FILE, secretFile.getAbsolutePath());
     }
@@ -95,6 +92,7 @@ public class SaslTokenAuthTest extends SaslAuthDigestTestBase {
     public static void tearDownAfterClass() {
         System.clearProperty(SaslTestUtil.authProviderProperty);
         System.clearProperty(SaslTestUtil.jaasConfig);
+        System.clearProperty("zookeeper.allowSaslFailedClients");
         System.clearProperty(DelegationTokenSecretManager.TOKEN_AUTH_ENABLED);
         System.clearProperty(DelegationTokenSecretManager.TOKEN_AUTH_SECRET_FILE);
     }
@@ -109,21 +107,19 @@ public class SaslTokenAuthTest extends SaslAuthDigestTestBase {
     }
 
     @Test
-    public void testTokenClientAuthorizedAsOwner() throws Exception {
+    public void testOfflineTokenNotInStoreRejected() throws Exception {
         ZooKeeper zk = null;
         CountdownWatcher watcher = new CountdownWatcher();
         try {
             zk = createClient(watcher);
-            zk.create("/token-auth-test", "data".getBytes(StandardCharsets.UTF_8),
-                Ids.CREATOR_ALL_ACL, CreateMode.PERSISTENT);
-
-            List<ACL> acls = zk.getACL("/token-auth-test", new Stat());
-            assertEquals(1, acls.size());
-            assertEquals("sasl", acls.get(0).getId().getScheme());
-            assertEquals(OWNER, acls.get(0).getId().getId());
-
-            assertArrayEquals("data".getBytes(StandardCharsets.UTF_8),
-                zk.getData("/token-auth-test", false, null));
+            // SASL failed, so the session has no sasl id and CREATOR_ALL_ACL
+            // cannot be satisfied
+            final ZooKeeper failedClient = zk;
+            assertThrows(KeeperException.class, () ->
+                failedClient.create("/offline-token-test", null, Ids.CREATOR_ALL_ACL, CreateMode.PERSISTENT));
+            // issuance also requires a successfully SASL-authenticated session
+            assertThrows(KeeperException.AuthFailedException.class, () ->
+                failedClient.getDelegationToken("bob", 0));
         } finally {
             if (zk != null) {
                 zk.close();
