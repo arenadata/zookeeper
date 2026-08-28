@@ -568,7 +568,7 @@
     <hamcrest.version>2.2</hamcrest.version>
     <commons-cli.version>1.5.0</commons-cli.version>
     <netty.version>4.1.137.Final</netty.version>
-    <jetty.version>9.4.58.v20250814</jetty.version>
+    <jetty.version>9.4.58.1</jetty.version>
     <jackson.version>2.18.10</jackson.version>
     <jline.version>3.30.16</jline.version>
     <snappy.version>1.1.10.5</snappy.version>
@@ -590,6 +590,13 @@
     <c-client-sasl>yes</c-client-sasl>
 
   </properties>
+
+  <repositories>
+    <repository>
+      <id>arenadata</id>
+      <url>https://maven.arenadata.io/arenadata</url>
+    </repository>
+  </repositories>
 
   <dependencyManagement>
     <dependencies>
