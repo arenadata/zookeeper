@@ -37,6 +37,7 @@ import org.apache.zookeeper.Login;
 import org.apache.zookeeper.common.ZKConfig;
 import org.apache.zookeeper.jmx.MBeanRegistry;
 import org.apache.zookeeper.server.auth.SaslServerCallbackHandler;
+import org.apache.zookeeper.server.token.DelegationTokenSecretManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -273,8 +274,9 @@ public abstract class ServerCnxnFactory {
         // jaas.conf entry available
         try {
             Map<String, String> credentials = getDigestMd5Credentials(entries);
+            DelegationTokenSecretManager tokenSecretManager = DelegationTokenSecretManager.createIfEnabled();
             Supplier<CallbackHandler> callbackHandlerSupplier = () -> {
-                return new SaslServerCallbackHandler(credentials);
+                return new SaslServerCallbackHandler(credentials, tokenSecretManager);
             };
             login = new Login(serverSection, callbackHandlerSupplier, new ZKConfig());
             setLoginUser(login.getUserName());
