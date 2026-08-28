@@ -20,6 +20,7 @@ package org.apache.zookeeper.server;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -66,9 +67,11 @@ import org.apache.zookeeper.proto.GetChildrenRequest;
 import org.apache.zookeeper.proto.GetChildrenResponse;
 import org.apache.zookeeper.proto.GetDataRequest;
 import org.apache.zookeeper.proto.GetDataResponse;
+import org.apache.zookeeper.proto.GetDelegationTokenResponse;
 import org.apache.zookeeper.proto.GetEphemeralsRequest;
 import org.apache.zookeeper.proto.GetEphemeralsResponse;
 import org.apache.zookeeper.proto.RemoveWatchesRequest;
+import org.apache.zookeeper.proto.RenewDelegationTokenResponse;
 import org.apache.zookeeper.proto.ReplyHeader;
 import org.apache.zookeeper.proto.SetACLResponse;
 import org.apache.zookeeper.proto.SetDataResponse;
@@ -79,9 +82,15 @@ import org.apache.zookeeper.proto.SyncResponse;
 import org.apache.zookeeper.proto.WhoAmIResponse;
 import org.apache.zookeeper.server.DataTree.ProcessTxnResult;
 import org.apache.zookeeper.server.quorum.QuorumZooKeeperServer;
+import org.apache.zookeeper.server.token.DelegationTokenSecretManager;
+import org.apache.zookeeper.server.token.DelegationTokenStore;
 import org.apache.zookeeper.server.util.AuthUtil;
 import org.apache.zookeeper.server.util.RequestPathMetricsCollector;
+import org.apache.zookeeper.txn.CreateTxn;
 import org.apache.zookeeper.txn.ErrorTxn;
+import org.apache.zookeeper.txn.MultiTxn;
+import org.apache.zookeeper.txn.SetDataTxn;
+import org.apache.zookeeper.txn.Txn;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -338,6 +347,34 @@ public class FinalRequestProcessor implements RequestProcessor {
                 rsp = new SetACLResponse(rc.stat);
                 err = Code.get(rc.err);
                 requestPathMetricsCollector.registerRequest(request.type, rc.path);
+                break;
+            }
+            case OpCode.getDelegationToken: {
+                lastOp = "GTOK";
+                DelegationTokenSecretManager tokenManager = zks.getDelegationTokenManager();
+                if (tokenManager == null) {
+                    throw new KeeperException.UnimplementedException();
+                }
+                CreateTxn tokenTxn = extractTokenCreateTxn(request.getTxn());
+                byte[] entry = tokenTxn.getData();
+                byte[] identifier = DelegationTokenStore.entryIdentifier(entry);
+                rsp = new GetDelegationTokenResponse(
+                    identifier,
+                    tokenManager.computePassword(identifier),
+                    DelegationTokenStore.entryExpiry(entry));
+                err = Code.get(rc.err);
+                break;
+            }
+            case OpCode.renewDelegationToken: {
+                lastOp = "RTOK";
+                SetDataTxn renewTxn = (SetDataTxn) request.getTxn();
+                rsp = new RenewDelegationTokenResponse(DelegationTokenStore.entryExpiry(renewTxn.getData()));
+                err = Code.get(rc.err);
+                break;
+            }
+            case OpCode.cancelDelegationToken: {
+                lastOp = "CTOK";
+                err = Code.get(rc.err);
                 break;
             }
             case OpCode.closeSession: {
@@ -666,6 +703,25 @@ public class FinalRequestProcessor implements RequestProcessor {
     public void shutdown() {
         // we are the final link in the chain
         LOG.info("shutdown of request processor complete");
+    }
+
+    /**
+     * Pulls the token node's CreateTxn out of the multi txn produced by a
+     * getDelegationToken request (which may also carry parent create/setACL
+     * sub-txns).
+     */
+    private static CreateTxn extractTokenCreateTxn(Record txn) throws IOException {
+        MultiTxn multiTxn = (MultiTxn) txn;
+        for (Txn subTxn : multiTxn.getTxns()) {
+            if (subTxn.getType() == ZooDefs.OpCode.create) {
+                CreateTxn createTxn = new CreateTxn();
+                ByteBufferInputStream.byteBuffer2Record(ByteBuffer.wrap(subTxn.getData()), createTxn);
+                if (createTxn.getPath().startsWith(DelegationTokenStore.TOKEN_NODE_PREFIX)) {
+                    return createTxn;
+                }
+            }
+        }
+        throw new IOException("getDelegationToken txn carries no token create sub-txn");
     }
 
     private void updateStats(Request request, String lastOp, long lastZxid) {

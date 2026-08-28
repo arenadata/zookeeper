@@ -47,18 +47,35 @@ public class DelegationTokenSecretManager {
 
     public static final String TOKEN_AUTH_ENABLED = "zookeeper.tokenAuth.enabled";
     public static final String TOKEN_AUTH_SECRET_FILE = "zookeeper.tokenAuth.secretFile";
+    public static final String TOKEN_AUTH_RENEW_INTERVAL = "zookeeper.tokenAuth.renewIntervalMs";
+    public static final String TOKEN_AUTH_MAX_LIFETIME = "zookeeper.tokenAuth.maxLifetimeMs";
+
+    public static final long DEFAULT_RENEW_INTERVAL_MS = 24L * 60 * 60 * 1000;
+    public static final long DEFAULT_MAX_LIFETIME_MS = 7L * 24 * 60 * 60 * 1000;
 
     private static final Logger LOG = LoggerFactory.getLogger(DelegationTokenSecretManager.class);
     private static final String HMAC_ALGORITHM = "HmacSHA256";
     private static final int MIN_KEY_LENGTH = 16;
 
     private final SecretKeySpec masterKey;
+    private final long renewIntervalMs;
+    private final long maxLifetimeMs;
 
     public DelegationTokenSecretManager(byte[] masterKey) {
         if (masterKey == null || masterKey.length < MIN_KEY_LENGTH) {
             throw new IllegalArgumentException("token master key must be at least " + MIN_KEY_LENGTH + " bytes");
         }
         this.masterKey = new SecretKeySpec(masterKey, HMAC_ALGORITHM);
+        this.renewIntervalMs = Long.getLong(TOKEN_AUTH_RENEW_INTERVAL, DEFAULT_RENEW_INTERVAL_MS);
+        this.maxLifetimeMs = Long.getLong(TOKEN_AUTH_MAX_LIFETIME, DEFAULT_MAX_LIFETIME_MS);
+    }
+
+    public long getRenewIntervalMs() {
+        return renewIntervalMs;
+    }
+
+    public long getMaxLifetimeMs() {
+        return maxLifetimeMs;
     }
 
     /**

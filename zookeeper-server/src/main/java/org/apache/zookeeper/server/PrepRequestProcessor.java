@@ -22,7 +22,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.StringReader;
 import java.nio.ByteBuffer;
+import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -41,6 +43,7 @@ import org.apache.zookeeper.KeeperException.BadArgumentsException;
 import org.apache.zookeeper.KeeperException.Code;
 import org.apache.zookeeper.MultiOperationRecord;
 import org.apache.zookeeper.Op;
+import org.apache.zookeeper.Quotas;
 import org.apache.zookeeper.ZooDefs;
 import org.apache.zookeeper.ZooDefs.OpCode;
 import org.apache.zookeeper.common.PathUtils;
@@ -49,11 +52,14 @@ import org.apache.zookeeper.common.Time;
 import org.apache.zookeeper.data.ACL;
 import org.apache.zookeeper.data.Id;
 import org.apache.zookeeper.data.StatPersisted;
+import org.apache.zookeeper.proto.CancelDelegationTokenRequest;
 import org.apache.zookeeper.proto.CheckVersionRequest;
 import org.apache.zookeeper.proto.CreateRequest;
 import org.apache.zookeeper.proto.CreateTTLRequest;
 import org.apache.zookeeper.proto.DeleteRequest;
+import org.apache.zookeeper.proto.GetDelegationTokenRequest;
 import org.apache.zookeeper.proto.ReconfigRequest;
+import org.apache.zookeeper.proto.RenewDelegationTokenRequest;
 import org.apache.zookeeper.proto.SetACLRequest;
 import org.apache.zookeeper.proto.SetDataRequest;
 import org.apache.zookeeper.server.ZooKeeperServer.ChangeRecord;
@@ -67,6 +73,9 @@ import org.apache.zookeeper.server.quorum.QuorumPeerConfig.ConfigException;
 import org.apache.zookeeper.server.quorum.flexible.QuorumMaj;
 import org.apache.zookeeper.server.quorum.flexible.QuorumOracleMaj;
 import org.apache.zookeeper.server.quorum.flexible.QuorumVerifier;
+import org.apache.zookeeper.server.token.DelegationTokenIdentifier;
+import org.apache.zookeeper.server.token.DelegationTokenSecretManager;
+import org.apache.zookeeper.server.token.DelegationTokenStore;
 import org.apache.zookeeper.txn.CheckVersionTxn;
 import org.apache.zookeeper.txn.CloseSessionTxn;
 import org.apache.zookeeper.txn.CreateContainerTxn;
@@ -105,6 +114,7 @@ public class PrepRequestProcessor extends ZooKeeperCriticalThread implements Req
 
     private final RequestProcessor nextProcessor;
     private final boolean digestEnabled;
+    private static final SecureRandom TOKEN_SEQUENCE_RANDOM = new SecureRandom();
     private DigestCalculator digestCalculator;
 
     ZooKeeperServer zks;
@@ -324,6 +334,18 @@ public class PrepRequestProcessor extends ZooKeeperCriticalThread implements Req
         case OpCode.createTTL:
         case OpCode.createContainer: {
             pRequest2TxnCreate(type, request, record);
+            break;
+        }
+        case OpCode.getDelegationToken: {
+            pRequest2TxnGetDelegationToken(request, zxid, (GetDelegationTokenRequest) record);
+            break;
+        }
+        case OpCode.renewDelegationToken: {
+            pRequest2TxnRenewDelegationToken(request, zxid, (RenewDelegationTokenRequest) record);
+            break;
+        }
+        case OpCode.cancelDelegationToken: {
+            pRequest2TxnCancelDelegationToken(request, zxid, (CancelDelegationTokenRequest) record);
             break;
         }
         case OpCode.deleteContainer: {
@@ -717,6 +739,209 @@ public class PrepRequestProcessor extends ZooKeeperCriticalThread implements Req
         addChangeRecord(nodeRecord);
     }
 
+    /**
+     * Turns a getDelegationToken request into a multi txn of plain create
+     * (and, when healing the parent ACL, setACL) sub-txns, so any ensemble
+     * member can apply it. The token password is derived from the identifier
+     * in FinalRequestProcessor and never enters the txn log.
+     */
+    private void pRequest2TxnGetDelegationToken(Request request, long zxid, GetDelegationTokenRequest tokenRequest) throws KeeperException, IOException {
+        DelegationTokenSecretManager tokenManager = requireTokenManager();
+        zks.sessionTracker.checkSession(request.sessionId, request.getOwner());
+        String owner = DelegationTokenStore.saslPrincipal(request.authInfo);
+        if (owner == null || DelegationTokenStore.isTokenAuthenticated(request.authInfo)) {
+            // issuance requires a SASL-authenticated session, and a delegation
+            // token must not mint further tokens
+            throw new KeeperException.NoAuthException();
+        }
+        TxnHeader hdr = request.getHdr();
+        long now = hdr.getTime();
+        long maxLifetime = tokenManager.getMaxLifetimeMs();
+        if (tokenRequest.getMaxLifetime() > 0) {
+            maxLifetime = Math.min(maxLifetime, tokenRequest.getMaxLifetime());
+        }
+        long maxDate = now + maxLifetime;
+        long expiry = Math.min(now + tokenManager.getRenewIntervalMs(), maxDate);
+
+        int sequence;
+        String path;
+        do {
+            sequence = TOKEN_SEQUENCE_RANDOM.nextInt(Integer.MAX_VALUE);
+            path = DelegationTokenStore.pathOf(sequence);
+        } while (tokenPathExists(path));
+
+        DelegationTokenIdentifier ident = new DelegationTokenIdentifier(
+            owner, tokenRequest.getRenewer(), "", now, maxDate, sequence, 1);
+        byte[] entry = DelegationTokenStore.encodeEntry(expiry, ident.toBytes());
+
+        List<Txn> txns = new ArrayList<>();
+        ChangeRecord tokenParent;
+        try {
+            tokenParent = getRecordForPath(DelegationTokenStore.TOKEN_NODE);
+        } catch (KeeperException.NoNodeException e) {
+            tokenParent = null;
+        }
+        if (tokenParent == null) {
+            // first issuance ever: create /zookeeper/token in the same txn
+            ChangeRecord zkRoot = getRecordForPath(Quotas.procZookeeper);
+            int rootCVersion = zkRoot.stat.getCversion() + 1;
+            txns.add(serializedTxn(OpCode.create,
+                new CreateTxn(DelegationTokenStore.TOKEN_NODE, new byte[0], ZooDefs.Ids.READ_ACL_UNSAFE, false, rootCVersion)));
+            zkRoot = zkRoot.duplicate(zxid);
+            zkRoot.childCount++;
+            zkRoot.stat.setCversion(rootCVersion);
+            zkRoot.stat.setPzxid(zxid);
+            zkRoot.precalculatedDigest = precalculateDigest(
+                DigestOpCode.UPDATE, Quotas.procZookeeper, zkRoot.data, zkRoot.stat);
+            addChangeRecord(zkRoot);
+
+            StatPersisted parentStat = DataTree.createStat(zxid, now, 0);
+            tokenParent = new ChangeRecord(zxid, DelegationTokenStore.TOKEN_NODE, parentStat, 0, ZooDefs.Ids.READ_ACL_UNSAFE);
+            tokenParent.data = new byte[0];
+            tokenParent.precalculatedDigest = precalculateDigest(
+                DigestOpCode.ADD, DelegationTokenStore.TOKEN_NODE, tokenParent.data, parentStat);
+            addChangeRecord(tokenParent);
+        } else if (!ZooDefs.Ids.READ_ACL_UNSAFE.equals(tokenParent.acl)) {
+            // heal a token parent that was pre-created with a different ACL
+            int newAversion = tokenParent.stat.getAversion() + 1;
+            txns.add(serializedTxn(OpCode.setACL,
+                new SetACLTxn(DelegationTokenStore.TOKEN_NODE, ZooDefs.Ids.READ_ACL_UNSAFE, newAversion)));
+            tokenParent = tokenParent.duplicate(zxid);
+            tokenParent.stat.setAversion(newAversion);
+            tokenParent.acl = ZooDefs.Ids.READ_ACL_UNSAFE;
+            tokenParent.precalculatedDigest = precalculateDigest(
+                DigestOpCode.UPDATE, DelegationTokenStore.TOKEN_NODE, tokenParent.data, tokenParent.stat);
+            addChangeRecord(tokenParent);
+        }
+
+        int parentCVersion = tokenParent.stat.getCversion() + 1;
+        txns.add(serializedTxn(OpCode.create,
+            new CreateTxn(path, entry, ZooDefs.Ids.READ_ACL_UNSAFE, false, parentCVersion)));
+        tokenParent = tokenParent.duplicate(zxid);
+        tokenParent.childCount++;
+        tokenParent.stat.setCversion(parentCVersion);
+        tokenParent.stat.setPzxid(zxid);
+        tokenParent.precalculatedDigest = precalculateDigest(
+            DigestOpCode.UPDATE, DelegationTokenStore.TOKEN_NODE, tokenParent.data, tokenParent.stat);
+        addChangeRecord(tokenParent);
+
+        StatPersisted nodeStat = DataTree.createStat(zxid, now, 0);
+        ChangeRecord nodeRecord = new ChangeRecord(zxid, path, nodeStat, 0, ZooDefs.Ids.READ_ACL_UNSAFE);
+        nodeRecord.data = entry;
+        nodeRecord.precalculatedDigest = precalculateDigest(DigestOpCode.ADD, path, entry, nodeStat);
+        addChangeRecord(nodeRecord);
+
+        request.setHdr(new TxnHeader(request.sessionId, request.cxid, zxid, now, OpCode.multi));
+        request.setTxn(new MultiTxn(txns));
+        if (digestEnabled) {
+            setTxnDigest(request);
+        }
+    }
+
+    private void pRequest2TxnRenewDelegationToken(Request request, long zxid, RenewDelegationTokenRequest renewRequest) throws KeeperException, IOException {
+        DelegationTokenSecretManager tokenManager = requireTokenManager();
+        zks.sessionTracker.checkSession(request.sessionId, request.getOwner());
+        DelegationTokenIdentifier ident = parseTokenIdentifier(renewRequest.getIdentifier());
+        String path = DelegationTokenStore.pathOf(ident.getSequenceNumber());
+        ChangeRecord nodeRecord = getRecordForPath(path);
+        byte[] storedIdentifier = DelegationTokenStore.entryIdentifier(nodeRecord.data);
+        if (!Arrays.equals(storedIdentifier, renewRequest.getIdentifier())) {
+            throw new KeeperException.BadArgumentsException(path);
+        }
+        if (!DelegationTokenStore.isSuper(request.authInfo)) {
+            String principal = DelegationTokenStore.saslPrincipal(request.authInfo);
+            if (principal == null || ident.getRenewer().isEmpty() || !principal.equals(ident.getRenewer())) {
+                throw new KeeperException.NoAuthException();
+            }
+        }
+        long now = request.getHdr().getTime();
+        if (now > ident.getMaxDate() || now > DelegationTokenStore.entryExpiry(nodeRecord.data)) {
+            // an expired token cannot be renewed
+            throw new KeeperException.NoAuthException();
+        }
+        long newExpiry = Math.min(now + tokenManager.getRenewIntervalMs(), ident.getMaxDate());
+        byte[] newData = DelegationTokenStore.encodeEntry(newExpiry, storedIdentifier);
+        int newVersion = nodeRecord.stat.getVersion() + 1;
+        request.setHdr(new TxnHeader(request.sessionId, request.cxid, zxid, now, OpCode.setData));
+        request.setTxn(new SetDataTxn(path, newData, newVersion));
+        nodeRecord = nodeRecord.duplicate(zxid);
+        nodeRecord.stat.setVersion(newVersion);
+        nodeRecord.stat.setMtime(now);
+        nodeRecord.stat.setMzxid(zxid);
+        nodeRecord.data = newData;
+        nodeRecord.precalculatedDigest = precalculateDigest(
+            DigestOpCode.UPDATE, path, nodeRecord.data, nodeRecord.stat);
+        setTxnDigest(request, nodeRecord.precalculatedDigest);
+        addChangeRecord(nodeRecord);
+    }
+
+    private void pRequest2TxnCancelDelegationToken(Request request, long zxid, CancelDelegationTokenRequest cancelRequest) throws KeeperException, IOException {
+        requireTokenManager();
+        // sessionId 0 marks internal requests posted by the expiry cleanup
+        if (request.sessionId != 0) {
+            zks.sessionTracker.checkSession(request.sessionId, request.getOwner());
+        }
+        DelegationTokenIdentifier ident = parseTokenIdentifier(cancelRequest.getIdentifier());
+        String path = DelegationTokenStore.pathOf(ident.getSequenceNumber());
+        ChangeRecord nodeRecord = getRecordForPath(path);
+        if (!Arrays.equals(DelegationTokenStore.entryIdentifier(nodeRecord.data), cancelRequest.getIdentifier())) {
+            throw new KeeperException.BadArgumentsException(path);
+        }
+        if (!DelegationTokenStore.isSuper(request.authInfo)) {
+            String principal = DelegationTokenStore.saslPrincipal(request.authInfo);
+            boolean allowed = principal != null
+                && (principal.equals(ident.getOwner()) || principal.equals(ident.getRenewer()));
+            if (!allowed) {
+                throw new KeeperException.NoAuthException();
+            }
+        }
+        ChangeRecord parentRecord = getRecordForPath(DelegationTokenStore.TOKEN_NODE);
+        request.setHdr(new TxnHeader(request.sessionId, request.cxid, zxid, request.getHdr().getTime(), OpCode.delete));
+        request.setTxn(new DeleteTxn(path));
+        parentRecord = parentRecord.duplicate(zxid);
+        parentRecord.childCount--;
+        parentRecord.stat.setPzxid(zxid);
+        parentRecord.precalculatedDigest = precalculateDigest(
+            DigestOpCode.UPDATE, DelegationTokenStore.TOKEN_NODE, parentRecord.data, parentRecord.stat);
+        addChangeRecord(parentRecord);
+        nodeRecord = new ChangeRecord(zxid, path, null, -1, null);
+        nodeRecord.precalculatedDigest = precalculateDigest(DigestOpCode.REMOVE, path);
+        setTxnDigest(request, nodeRecord.precalculatedDigest);
+        addChangeRecord(nodeRecord);
+    }
+
+    private DelegationTokenSecretManager requireTokenManager() throws KeeperException.UnimplementedException {
+        DelegationTokenSecretManager tokenManager = zks.getDelegationTokenManager();
+        if (tokenManager == null) {
+            throw new KeeperException.UnimplementedException();
+        }
+        return tokenManager;
+    }
+
+    private static DelegationTokenIdentifier parseTokenIdentifier(byte[] identifier) throws BadArgumentsException {
+        try {
+            return DelegationTokenIdentifier.fromBytes(identifier);
+        } catch (IOException e) {
+            throw new BadArgumentsException(DelegationTokenStore.TOKEN_NODE);
+        }
+    }
+
+    private boolean tokenPathExists(String path) {
+        try {
+            return getRecordForPath(path) != null;
+        } catch (KeeperException.NoNodeException e) {
+            return false;
+        }
+    }
+
+    private static Txn serializedTxn(int type, Record txn) throws IOException {
+        try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+            BinaryOutputArchive boa = BinaryOutputArchive.getArchive(baos);
+            txn.serialize(boa, "request");
+            return new Txn(type, baos.toByteArray());
+        }
+    }
+
     private void validatePath(String path, long sessionId) throws BadArgumentsException {
         try {
             PathUtils.validatePath(path);
@@ -789,6 +1014,18 @@ public class PrepRequestProcessor extends ZooKeeperCriticalThread implements Req
             case OpCode.setData:
                 SetDataRequest setDataRequest = request.readRequestRecord(SetDataRequest::new);
                 pRequest2Txn(request.type, zks.getNextZxid(), request, setDataRequest);
+                break;
+            case OpCode.getDelegationToken:
+                GetDelegationTokenRequest getTokenRequest = request.readRequestRecord(GetDelegationTokenRequest::new);
+                pRequest2Txn(request.type, zks.getNextZxid(), request, getTokenRequest);
+                break;
+            case OpCode.renewDelegationToken:
+                RenewDelegationTokenRequest renewTokenRequest = request.readRequestRecord(RenewDelegationTokenRequest::new);
+                pRequest2Txn(request.type, zks.getNextZxid(), request, renewTokenRequest);
+                break;
+            case OpCode.cancelDelegationToken:
+                CancelDelegationTokenRequest cancelTokenRequest = request.readRequestRecord(CancelDelegationTokenRequest::new);
+                pRequest2Txn(request.type, zks.getNextZxid(), request, cancelTokenRequest);
                 break;
             case OpCode.reconfig:
                 ReconfigRequest reconfigRequest = request.readRequestRecord(ReconfigRequest::new);

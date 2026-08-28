@@ -97,6 +97,13 @@ public class SaslServerCallbackHandler implements CallbackHandler {
         userName = nc.getDefaultName();
     }
 
+    /**
+     * Returns whether the last handled authentication was a delegation token.
+     */
+    public boolean isTokenAuthenticated() {
+        return tokenIdentifier != null;
+    }
+
     private DelegationTokenIdentifier tryParseToken(String name) {
         if (name == null || name.isEmpty()) {
             return null;

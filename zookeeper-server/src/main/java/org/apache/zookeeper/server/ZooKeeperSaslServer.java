@@ -19,9 +19,11 @@
 package org.apache.zookeeper.server;
 
 import javax.security.auth.Subject;
+import javax.security.auth.callback.CallbackHandler;
 import javax.security.sasl.SaslException;
 import javax.security.sasl.SaslServer;
 import org.apache.zookeeper.Login;
+import org.apache.zookeeper.server.auth.SaslServerCallbackHandler;
 import org.apache.zookeeper.util.SecurityUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,6 +36,7 @@ public class ZooKeeperSaslServer {
     private static final Logger LOG = LoggerFactory.getLogger(ZooKeeperSaslServer.class);
     private final Login login;
     private SaslServer saslServer;
+    private CallbackHandler callbackHandler;
 
     ZooKeeperSaslServer(final Login login) {
         this.login = login;
@@ -49,14 +52,24 @@ public class ZooKeeperSaslServer {
         synchronized (login) {
             Subject subject = login.getSubject();
             boolean hasKerberosPrincipal = subject != null && !subject.getPrincipals().isEmpty();
+            callbackHandler = login.newCallbackHandler();
             if (hasKerberosPrincipal && firstToken.length > 0) {
-                return SecurityUtils.createGssSaslServer(subject, login.newCallbackHandler(), LOG);
+                return SecurityUtils.createGssSaslServer(subject, callbackHandler, LOG);
             }
             if (subject == null) {
                 return null;
             }
-            return SecurityUtils.createDigestSaslServer("zookeeper", "zk-sasl-md5", login.newCallbackHandler(), LOG);
+            return SecurityUtils.createDigestSaslServer("zookeeper", "zk-sasl-md5", callbackHandler, LOG);
         }
+    }
+
+    /**
+     * Returns whether the completed authentication used a delegation token
+     * rather than a Kerberos ticket or a static DIGEST user.
+     */
+    public boolean isTokenAuthenticated() {
+        return callbackHandler instanceof SaslServerCallbackHandler
+            && ((SaslServerCallbackHandler) callbackHandler).isTokenAuthenticated();
     }
 
     public byte[] evaluateResponse(byte[] response) throws SaslException {
