@@ -125,6 +125,10 @@ public class DelegationTokenIntegrationTest extends SaslAuthDigestTestBase {
         assertSame(token, ZooKeeperDelegationTokens.selectToken(credentials, SERVICE));
         assertNull(ZooKeeperDelegationTokens.selectToken(credentials, "other-service"));
 
+        // consumer side: the token is visible through the current UGI
+        org.apache.hadoop.security.UserGroupInformation.getCurrentUser().addCredentials(credentials);
+        assertEquals(token.getKind(), ZooKeeperDelegationTokens.selectTokenFromUgi(SERVICE).getKind());
+
         // a plain ZooKeeper client authenticates with the token via JAAS glue
         javax.security.auth.login.Configuration previous =
             ZooKeeperDelegationTokens.installTokenJaasConfiguration(token);

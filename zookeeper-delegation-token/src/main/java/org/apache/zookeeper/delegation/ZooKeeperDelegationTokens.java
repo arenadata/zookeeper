@@ -24,6 +24,7 @@ import java.util.concurrent.TimeUnit;
 import javax.security.auth.login.Configuration;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.security.Credentials;
+import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.token.Token;
 import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.Watcher.Event.KeeperState;
@@ -105,6 +106,30 @@ public final class ZooKeeperDelegationTokens {
             return token;
         }
         return null;
+    }
+
+    /**
+     * Picks the ZooKeeper delegation token filed under the given service from
+     * the current UGI credentials. In a YARN container or Spark executor the
+     * distributed job credentials (including HADOOP_TOKEN_FILE_LOCATION) are
+     * already loaded there, so this is the consumer-side lookup.
+     */
+    public static Token<?> selectTokenFromUgi(String service) throws IOException {
+        return selectToken(UserGroupInformation.getCurrentUser().getCredentials(), service);
+    }
+
+    /**
+     * Convenience for token consumers: picks the token for the service from
+     * the current UGI and installs the JAAS glue so a plain ZooKeeper client
+     * authenticates with it. Returns false when the UGI holds no such token.
+     */
+    public static boolean installTokenFromUgi(String service) throws IOException {
+        Token<?> token = selectTokenFromUgi(service);
+        if (token == null) {
+            return false;
+        }
+        installTokenJaasConfiguration(token);
+        return true;
     }
 
     /**
