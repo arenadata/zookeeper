@@ -32,25 +32,45 @@ public class ZooKeeperSaslServer {
     public static final String DEFAULT_LOGIN_CONTEXT_NAME = "Server";
 
     private static final Logger LOG = LoggerFactory.getLogger(ZooKeeperSaslServer.class);
+    private final Login login;
     private SaslServer saslServer;
 
     ZooKeeperSaslServer(final Login login) {
-        saslServer = createSaslServer(login);
+        this.login = login;
     }
 
-    private SaslServer createSaslServer(final Login login) {
+    /**
+     * Picks the SASL mechanism from the first client packet: a DIGEST-MD5 client
+     * starts with an empty token, a GSSAPI client with a non-empty one. A server
+     * without a Kerberos principal keeps the historical behavior and always
+     * negotiates DIGEST-MD5. No wire protocol change is involved.
+     */
+    private SaslServer createSaslServer(byte[] firstToken) {
         synchronized (login) {
             Subject subject = login.getSubject();
-            return SecurityUtils.createSaslServer(subject, "zookeeper", "zk-sasl-md5", login.newCallbackHandler(), LOG);
+            boolean hasKerberosPrincipal = subject != null && !subject.getPrincipals().isEmpty();
+            if (hasKerberosPrincipal && firstToken.length > 0) {
+                return SecurityUtils.createGssSaslServer(subject, login.newCallbackHandler(), LOG);
+            }
+            if (subject == null) {
+                return null;
+            }
+            return SecurityUtils.createDigestSaslServer("zookeeper", "zk-sasl-md5", login.newCallbackHandler(), LOG);
         }
     }
 
     public byte[] evaluateResponse(byte[] response) throws SaslException {
+        if (saslServer == null) {
+            saslServer = createSaslServer(response);
+            if (saslServer == null) {
+                throw new SaslException("failed to create a SaslServer for the client response");
+            }
+        }
         return saslServer.evaluateResponse(response);
     }
 
     public boolean isComplete() {
-        return saslServer.isComplete();
+        return saslServer != null && saslServer.isComplete();
     }
 
     public String getAuthorizationID() {
