@@ -63,6 +63,7 @@
     <module>zookeeper-metrics-providers</module>
     <module>zookeeper-client</module>
     <module>zookeeper-recipes</module>
+    <module>zookeeper-delegation-token</module>
     <module>zookeeper-assembly</module>
     <module>zookeeper-compatibility-tests</module>
   </modules>
