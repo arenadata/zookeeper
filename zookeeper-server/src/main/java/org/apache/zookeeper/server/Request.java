@@ -338,6 +338,9 @@ public class Request {
         case OpCode.removeWatches:
         case OpCode.addWatch:
         case OpCode.whoAmI:
+        case OpCode.getDelegationToken:
+        case OpCode.renewDelegationToken:
+        case OpCode.cancelDelegationToken:
             return true;
         default:
             return false;
@@ -368,6 +371,9 @@ public class Request {
         case OpCode.check:
         case OpCode.multi:
         case OpCode.reconfig:
+        case OpCode.getDelegationToken:
+        case OpCode.renewDelegationToken:
+        case OpCode.cancelDelegationToken:
             return true;
         case OpCode.closeSession:
         case OpCode.createSession:
@@ -445,6 +451,12 @@ public class Request {
                 return "error";
             case OpCode.whoAmI:
                 return "whoAmI";
+            case OpCode.getDelegationToken:
+                return "getDelegationToken";
+            case OpCode.renewDelegationToken:
+                return "renewDelegationToken";
+            case OpCode.cancelDelegationToken:
+                return "cancelDelegationToken";
             default:
                 return "unknown " + op;
         }
