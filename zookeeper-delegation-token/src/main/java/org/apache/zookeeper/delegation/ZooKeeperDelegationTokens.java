@@ -138,6 +138,9 @@ public final class ZooKeeperDelegationTokens {
      * with the token. Every other JAAS section keeps delegating to the
      * previously installed configuration. Returns the previous configuration
      * so the caller can restore it.
+     *
+     * <p>The JAAS configuration is JVM-global, so concurrent calls with
+     * different tokens overwrite each other; install a token once per process.
      */
     public static Configuration installTokenJaasConfiguration(Token<?> token) {
         Configuration base = currentJaasConfigurationOrNull();
