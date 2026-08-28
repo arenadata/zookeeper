@@ -71,10 +71,11 @@ public class DelegationTokenIdentifierTest {
         TEXT_VECTORS.put("клиент", "0cd0bad0bbd0b8d0b5d0bdd182");
     }
 
+    // Leading 00 is the AbstractDelegationTokenIdentifier version byte.
     private static final String IDENT1_HEX =
-        "11616c696365404558414d504c452e434f4d047961726e008a0198edf960008a01991205e4002a01";
+        "0011616c696365404558414d504c452e434f4d047961726e008a0198edf960008a01991205e4002a01";
     private static final String IDENT2_HEX =
-        "1ad181d0b5d180d0b2d0b8d1812f686f7374405245414c4d2e52551a726d2f726d2e6578616d706c652e636f6d"
+        "001ad181d0b5d180d0b2d0b8d1812f686f7374405245414c4d2e52551a726d2f726d2e6578616d706c652e636f6d"
             + "405245414c4d2e52550970726f7879557365728a018bcfe5687b8a018bf3f1edc88d01e24007";
 
     @Test
@@ -149,8 +150,9 @@ public class DelegationTokenIdentifierTest {
     public void testEmptyOwnerRejected() {
         assertThrows(IllegalArgumentException.class,
             () -> new DelegationTokenIdentifier("", "r", "", 1L, 2L, 3, 4));
-        // Encoded form of an identifier with all-empty text fields.
-        byte[] emptyOwner = bytes("000000000000");
+        // Encoded form of an identifier with all-empty text fields
+        // (version byte, three empty texts, two vlongs, two vints).
+        byte[] emptyOwner = bytes("0000000000000000");
         assertThrows(IOException.class, () -> DelegationTokenIdentifier.fromBytes(emptyOwner));
     }
 

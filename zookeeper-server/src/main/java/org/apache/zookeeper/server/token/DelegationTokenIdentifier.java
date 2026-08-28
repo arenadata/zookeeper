@@ -41,6 +41,9 @@ public class DelegationTokenIdentifier {
 
     public static final String KIND = "ZOOKEEPER_DELEGATION_TOKEN";
 
+    /** Version byte written by Hadoop {@code AbstractDelegationTokenIdentifier}. */
+    private static final byte VERSION = 0;
+
     /** Maximum encoded string length, same as Hadoop {@code Text.DEFAULT_MAX_LEN}. */
     private static final int MAX_TEXT_LENGTH = 1024 * 1024;
 
@@ -107,6 +110,7 @@ public class DelegationTokenIdentifier {
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         DataOutputStream out = new DataOutputStream(buffer);
         try {
+            out.writeByte(VERSION);
             writeText(out, owner);
             writeText(out, renewer);
             writeText(out, realUser);
@@ -130,6 +134,10 @@ public class DelegationTokenIdentifier {
     public static DelegationTokenIdentifier fromBytes(byte[] data) throws IOException {
         ByteArrayInputStream buffer = new ByteArrayInputStream(data);
         DataInputStream in = new DataInputStream(buffer);
+        byte version = in.readByte();
+        if (version != VERSION) {
+            throw new IOException("unknown token identifier version: " + version);
+        }
         String owner = readText(in);
         String renewer = readText(in);
         String realUser = readText(in);
