@@ -23,8 +23,10 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileWriter;
+import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Base64;
@@ -38,6 +40,7 @@ import org.apache.zookeeper.server.token.DelegationTokenCleanupManager;
 import org.apache.zookeeper.server.token.DelegationTokenIdentifier;
 import org.apache.zookeeper.server.token.DelegationTokenSecretManager;
 import org.apache.zookeeper.server.token.DelegationTokenStore;
+import org.apache.zookeeper.server.token.DelegationTokenTool;
 import org.apache.zookeeper.test.SaslAuthDigestTestBase;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -194,6 +197,38 @@ public class DelegationTokenOpsTest extends SaslAuthDigestTestBase {
             assertThrows(KeeperException.NoNodeException.class,
                 () -> bob.renewDelegationToken(token.getIdentifier()));
         }
+    }
+
+    @Test
+    public void testToolIssuesLiveToken() throws Exception {
+        ByteArrayOutputStream toolOutput = new ByteArrayOutputStream();
+        DelegationTokenTool.run(
+            new String[]{"--server", hostPort, "--renewer", "bob"},
+            new PrintStream(toolOutput, true, "UTF-8"));
+        String output = toolOutput.toString("UTF-8");
+
+        byte[] identifier = Base64.getDecoder().decode(valueOf(output, "Identifier:"));
+        byte[] password = Base64.getDecoder().decode(valueOf(output, "Password:"));
+        DelegationTokenIdentifier ident = DelegationTokenIdentifier.fromBytes(identifier);
+        assertEquals("alice", ident.getOwner());
+        assertEquals("bob", ident.getRenewer());
+
+        GetDelegationTokenResponse token = new GetDelegationTokenResponse(identifier, password, 0);
+        installTokenClientSection(token);
+        try (ZooKeeper tokenClient = client("ClientToken")) {
+            List<ClientInfo> clientInfo = tokenClient.whoAmI();
+            assertTrue(clientInfo.stream().anyMatch(
+                info -> "sasl".equals(info.getAuthScheme()) && "alice".equals(info.getUser())));
+        }
+    }
+
+    private static String valueOf(String output, String label) {
+        for (String line : output.split("\n")) {
+            if (line.startsWith(label)) {
+                return line.substring(label.length()).trim();
+            }
+        }
+        throw new IllegalStateException("no '" + label + "' line in tool output:\n" + output);
     }
 
     @Test

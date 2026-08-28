@@ -22,15 +22,27 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.security.SecureRandom;
 import java.util.Base64;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import org.apache.zookeeper.KeeperException;
+import org.apache.zookeeper.Watcher.Event.KeeperState;
+import org.apache.zookeeper.ZooKeeper;
+import org.apache.zookeeper.proto.GetDelegationTokenResponse;
 
 /**
- * Offline delegation token generator. Derives the token password from the
- * ensemble master key file, so a token minted here is accepted by any server
- * of the ensemble configured with the same key.
+ * Delegation token generator.
+ *
+ * <p>The primary mode ({@code --server}) connects to the ensemble as a SASL
+ * client (JAAS configuration comes from the environment, like any ZooKeeper
+ * client) and requests a live token via getDelegationToken. The offline mode
+ * ({@code --secret-file}) derives a token directly from the master key; such
+ * a token is absent from the replicated store and is rejected by servers, so
+ * it is useful only for diagnostics.
  */
 public class DelegationTokenTool {
 
-    private static final long DEFAULT_MAX_LIFETIME_MS = 7L * 24 * 60 * 60 * 1000;
+    private static final long DEFAULT_OFFLINE_MAX_LIFETIME_MS = 7L * 24 * 60 * 60 * 1000;
+    private static final int CONNECT_TIMEOUT_SECONDS = 30;
 
     private DelegationTokenTool() {
     }
@@ -43,21 +55,25 @@ public class DelegationTokenTool {
             usage(System.err);
             System.exit(1);
         } catch (IOException e) {
-            System.err.println("failed to read master key: " + e.getMessage());
+            System.err.println("token generation failed: " + e.getMessage());
             System.exit(2);
         }
     }
 
     public static void run(String[] args, PrintStream out) throws IOException {
+        String server = null;
         String secretFile = null;
         String owner = null;
         String renewer = "";
         String realUser = "";
-        long maxLifetimeMs = DEFAULT_MAX_LIFETIME_MS;
+        long maxLifetimeMs = -1;
 
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
             switch (arg) {
+            case "--server":
+                server = argValue(args, ++i, arg);
+                break;
             case "--secret-file":
                 secretFile = argValue(args, ++i, arg);
                 break;
@@ -77,24 +93,70 @@ public class DelegationTokenTool {
                 throw new IllegalArgumentException("unknown option: " + arg);
             }
         }
-        if (secretFile == null) {
-            throw new IllegalArgumentException("--secret-file is required");
+        if ((server == null) == (secretFile == null)) {
+            throw new IllegalArgumentException("exactly one of --server or --secret-file is required");
         }
-        if (owner == null || owner.isEmpty()) {
-            throw new IllegalArgumentException("--owner is required");
+        if (server != null) {
+            issueOnline(server, renewer, Math.max(maxLifetimeMs, 0), out);
+        } else {
+            issueOffline(secretFile, owner, renewer, realUser,
+                maxLifetimeMs < 0 ? DEFAULT_OFFLINE_MAX_LIFETIME_MS : maxLifetimeMs, out);
         }
+    }
 
+    private static void issueOnline(String connectString, String renewer, long maxLifetimeMs, PrintStream out) throws IOException {
+        CountDownLatch connected = new CountDownLatch(1);
+        ZooKeeper zk = new ZooKeeper(connectString, 30000, event -> {
+            if (event.getState() == KeeperState.SyncConnected) {
+                connected.countDown();
+            }
+        });
+        try {
+            if (!connected.await(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                throw new IOException("timed out connecting to " + connectString);
+            }
+            GetDelegationTokenResponse token = zk.getDelegationToken(renewer, maxLifetimeMs);
+            printToken(out, token.getIdentifier(), token.getPassword(), token.getExpiryTime());
+        } catch (KeeperException e) {
+            throw new IOException("token request failed: " + e.getMessage(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("interrupted while talking to " + connectString, e);
+        } finally {
+            try {
+                zk.close();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    private static void issueOffline(
+        String secretFile,
+        String owner,
+        String renewer,
+        String realUser,
+        long maxLifetimeMs,
+        PrintStream out) throws IOException {
+        if (owner == null || owner.isEmpty()) {
+            throw new IllegalArgumentException("--owner is required with --secret-file");
+        }
         DelegationTokenSecretManager manager =
             new DelegationTokenSecretManager(DelegationTokenSecretManager.readSecretFile(secretFile));
-
         long issueDate = System.currentTimeMillis();
         int sequenceNumber = new SecureRandom().nextInt(Integer.MAX_VALUE);
         DelegationTokenIdentifier ident = new DelegationTokenIdentifier(
             owner, renewer, realUser, issueDate, issueDate + maxLifetimeMs, sequenceNumber, 1);
-
         byte[] identifierBytes = ident.toBytes();
+        System.err.println("WARNING: an offline token is absent from the server token store"
+            + " and will be rejected by servers; use --server to issue a live token.");
+        printToken(out, identifierBytes, manager.computePassword(identifierBytes), null);
+    }
+
+    private static void printToken(PrintStream out, byte[] identifierBytes, byte[] password, Long expiryTime) throws IOException {
+        DelegationTokenIdentifier ident = DelegationTokenIdentifier.fromBytes(identifierBytes);
         String identifierB64 = Base64.getEncoder().encodeToString(identifierBytes);
-        String passwordB64 = Base64.getEncoder().encodeToString(manager.computePassword(identifierBytes));
+        String passwordB64 = Base64.getEncoder().encodeToString(password);
 
         out.println("Kind:       " + DelegationTokenIdentifier.KIND);
         out.println("Identifier: " + identifierB64);
@@ -102,6 +164,9 @@ public class DelegationTokenTool {
         out.println("Owner:      " + ident.getOwner());
         out.println("Renewer:    " + ident.getRenewer());
         out.println("MaxDate:    " + ident.getMaxDate());
+        if (expiryTime != null) {
+            out.println("Expiry:     " + expiryTime);
+        }
         out.println();
         out.println("JAAS client section:");
         out.println("Client {");
@@ -152,8 +217,9 @@ public class DelegationTokenTool {
     }
 
     private static void usage(PrintStream out) {
-        out.println("usage: zkTokenTool.sh --secret-file <path> --owner <principal>"
-            + " [--renewer <principal>] [--real-user <principal>] [--max-lifetime <7d|24h|30m|60s|millis>]");
+        out.println("usage: zkTokenTool.sh --server <connect-string> [--renewer <principal>] [--max-lifetime <7d|24h|30m|60s|millis>]");
+        out.println("       zkTokenTool.sh --secret-file <path> --owner <principal>"
+            + " [--renewer <principal>] [--real-user <principal>] [--max-lifetime <...>]   (diagnostics only)");
     }
 
 }
