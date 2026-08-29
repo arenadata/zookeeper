@@ -44,10 +44,12 @@ public class SaslServerCallbackHandlerTest {
 
     private final DelegationTokenSecretManager tokenManager = new DelegationTokenSecretManager(KEY);
     private final Map<Integer, byte[]> store = new HashMap<>();
+    private final Map<Integer, byte[]> keyStore = new HashMap<>();
     private final DelegationTokenStore.EntryReader storeReader = store::get;
+    private final DelegationTokenStore.KeyReader keyReader = keyStore::get;
 
     private SaslServerCallbackHandler handler() {
-        return new SaslServerCallbackHandler(CREDENTIALS, tokenManager, storeReader);
+        return new SaslServerCallbackHandler(CREDENTIALS, tokenManager, storeReader, keyReader);
     }
 
     private static DelegationTokenIdentifier liveToken(String owner) {
@@ -136,6 +138,56 @@ public class SaslServerCallbackHandlerTest {
     public void testTokenLookingNameWithoutManagerIsStaticUser() throws Exception {
         DelegationTokenIdentifier ident = liveToken("alice");
         SaslServerCallbackHandler handler = new SaslServerCallbackHandler(CREDENTIALS);
+        assertNull(runNameAndPassword(handler, tokenUsername(ident)));
+    }
+
+    private static DelegationTokenIdentifier liveRotatedToken(String owner, int keyId) {
+        long now = System.currentTimeMillis();
+        return new DelegationTokenIdentifier(owner, "yarn", "", now, now + 3_600_000L, 7, keyId);
+    }
+
+    private void putKeyInStore(int keyId, byte[] keyBytes, long created, long expiry) {
+        keyStore.put(keyId, DelegationTokenStore.encodeKeyEntry(created, expiry, keyBytes));
+    }
+
+    @Test
+    public void testRotatedKeyTokenAuthentication() throws Exception {
+        SaslServerCallbackHandler handler = handler();
+        long now = System.currentTimeMillis();
+        byte[] rotatedKey = tokenManager.generateKeyBytes();
+        putKeyInStore(2, rotatedKey, now, now + 3_600_000L);
+        DelegationTokenIdentifier ident = liveRotatedToken("alice", 2);
+        putInStore(ident, now + 3_600_000L);
+
+        char[] password = runNameAndPassword(handler, tokenUsername(ident));
+        char[] expected = Base64.getEncoder()
+            .encodeToString(DelegationTokenSecretManager.computePassword(rotatedKey, ident.toBytes())).toCharArray();
+        assertArrayEquals(expected, password);
+    }
+
+    @Test
+    public void testUnknownSigningKeyRejected() throws Exception {
+        DelegationTokenIdentifier ident = liveRotatedToken("alice", 5);
+        putInStore(ident, System.currentTimeMillis() + 3_600_000L);
+        assertNull(runNameAndPassword(handler(), tokenUsername(ident)));
+    }
+
+    @Test
+    public void testExpiredSigningKeyRejected() throws Exception {
+        long now = System.currentTimeMillis();
+        putKeyInStore(2, tokenManager.generateKeyBytes(), now - 7_200_000L, now - 1000L);
+        DelegationTokenIdentifier ident = liveRotatedToken("alice", 2);
+        putInStore(ident, now + 3_600_000L);
+        assertNull(runNameAndPassword(handler(), tokenUsername(ident)));
+    }
+
+    @Test
+    public void testStaticKeyTokenWithoutSecretFileRejected() throws Exception {
+        DelegationTokenSecretManager rotationOnly = new DelegationTokenSecretManager(null, true);
+        SaslServerCallbackHandler handler =
+            new SaslServerCallbackHandler(CREDENTIALS, rotationOnly, storeReader, keyReader);
+        DelegationTokenIdentifier ident = liveToken("alice");
+        putInStore(ident, System.currentTimeMillis() + 3_600_000L);
         assertNull(runNameAndPassword(handler, tokenUsername(ident)));
     }
 

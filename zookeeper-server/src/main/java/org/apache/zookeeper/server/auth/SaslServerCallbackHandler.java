@@ -48,20 +48,25 @@ public class SaslServerCallbackHandler implements CallbackHandler {
     private final Map<String, String> credentials;
     private final DelegationTokenSecretManager tokenManager;
     private final DelegationTokenStore.EntryReader tokenStore;
+    private final DelegationTokenStore.KeyReader keyStore;
     private DelegationTokenIdentifier tokenIdentifier;
     private byte[] tokenIdentifierBytes;
+    // rotated signing key bytes; null means the static file key
+    private byte[] tokenSigningKey;
 
     public SaslServerCallbackHandler(Map<String, String> credentials) {
-        this(credentials, null, null);
+        this(credentials, null, null, null);
     }
 
     public SaslServerCallbackHandler(
         Map<String, String> credentials,
         DelegationTokenSecretManager tokenManager,
-        DelegationTokenStore.EntryReader tokenStore) {
+        DelegationTokenStore.EntryReader tokenStore,
+        DelegationTokenStore.KeyReader keyStore) {
         this.credentials = credentials;
         this.tokenManager = tokenManager;
         this.tokenStore = tokenStore;
+        this.keyStore = keyStore;
     }
 
     public void handle(Callback[] callbacks) throws UnsupportedCallbackException {
@@ -81,21 +86,25 @@ public class SaslServerCallbackHandler implements CallbackHandler {
     private void handleNameCallback(NameCallback nc) {
         tokenIdentifier = null;
         tokenIdentifierBytes = null;
+        tokenSigningKey = null;
         // a delegation token client sends base64(identifier) as the username;
         // anything that does not strictly parse falls back to the static user map.
         if (tokenManager != null) {
             byte[] decoded = tryDecodeToken(nc.getDefaultName());
             DelegationTokenIdentifier ident = decoded == null ? null : tryParseToken(decoded);
             if (ident != null) {
+                byte[] signingKey;
                 try {
                     tokenManager.validate(ident);
                     validateAgainstStore(ident, decoded);
+                    signingKey = resolveSigningKey(ident);
                 } catch (SaslException e) {
                     LOG.warn("Rejecting delegation token: {}", e.getMessage());
                     return;
                 }
                 tokenIdentifier = ident;
                 tokenIdentifierBytes = decoded;
+                tokenSigningKey = signingKey;
                 nc.setName(nc.getDefaultName());
                 userName = nc.getDefaultName();
                 return;
@@ -137,6 +146,34 @@ public class SaslServerCallbackHandler implements CallbackHandler {
     }
 
     /**
+     * Resolves the key the identifier was signed with: null for the static
+     * file key, the key bytes from the replicated store for a rotated key.
+     */
+    private byte[] resolveSigningKey(DelegationTokenIdentifier ident) throws SaslException {
+        if (ident.getMasterKeyId() == DelegationTokenSecretManager.STATIC_KEY_ID) {
+            if (!tokenManager.hasStaticKey()) {
+                throw new SaslException("delegation token references the static master key but none is configured");
+            }
+            return null;
+        }
+        if (keyStore == null) {
+            throw new SaslException("delegation token key store is not available");
+        }
+        byte[] entry = keyStore.keyEntry(ident.getMasterKeyId());
+        if (entry == null) {
+            throw new SaslException("delegation token signing key " + ident.getMasterKeyId() + " is unknown");
+        }
+        try {
+            if (Time.currentWallTime() > DelegationTokenStore.keyEntryExpiry(entry)) {
+                throw new SaslException("delegation token signing key " + ident.getMasterKeyId() + " has expired");
+            }
+            return DelegationTokenStore.keyEntryBytes(entry);
+        } catch (IOException e) {
+            throw new SaslException("malformed delegation token key entry " + ident.getMasterKeyId());
+        }
+    }
+
+    /**
      * Returns whether the last handled authentication was a delegation token.
      */
     public boolean isTokenAuthenticated() {
@@ -164,7 +201,9 @@ public class SaslServerCallbackHandler implements CallbackHandler {
 
     private void handlePasswordCallback(PasswordCallback pc) {
         if (tokenIdentifier != null) {
-            byte[] password = tokenManager.computePassword(tokenIdentifierBytes);
+            byte[] password = tokenSigningKey == null
+                ? tokenManager.computePassword(tokenIdentifierBytes)
+                : DelegationTokenSecretManager.computePassword(tokenSigningKey, tokenIdentifierBytes);
             pc.setPassword(Base64.getEncoder().encodeToString(password).toCharArray());
         } else if ("super".equals(this.userName) && System.getProperty(SYSPROP_SUPER_PASSWORD) != null) {
             // superuser: use Java system property for password, if available.

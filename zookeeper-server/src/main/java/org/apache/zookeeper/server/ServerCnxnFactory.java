@@ -277,8 +277,9 @@ public abstract class ServerCnxnFactory {
             Map<String, String> credentials = getDigestMd5Credentials(entries);
             DelegationTokenSecretManager tokenSecretManager = DelegationTokenSecretManager.createIfEnabled();
             DelegationTokenStore.EntryReader tokenStore = tokenSecretManager == null ? null : this::readTokenStoreEntry;
+            DelegationTokenStore.KeyReader keyStore = tokenSecretManager == null ? null : this::readTokenKeyEntry;
             Supplier<CallbackHandler> callbackHandlerSupplier = () -> {
-                return new SaslServerCallbackHandler(credentials, tokenSecretManager, tokenStore);
+                return new SaslServerCallbackHandler(credentials, tokenSecretManager, tokenStore, keyStore);
             };
             login = new Login(serverSection, callbackHandlerSupplier, new ZKConfig());
             setLoginUser(login.getUserName());
@@ -301,6 +302,20 @@ public abstract class ServerCnxnFactory {
             return null;
         }
         DataNode node = zks.getZKDatabase().getDataTree().getNode(DelegationTokenStore.pathOf(sequenceNumber));
+        return node == null ? null : node.getData();
+    }
+
+    /**
+     * Reads a delegation token master key entry from the data tree of the
+     * server attached to this factory; null while the server is not up yet or
+     * when the key is not in the store.
+     */
+    private byte[] readTokenKeyEntry(int keyId) {
+        ZooKeeperServer zks = getZooKeeperServer();
+        if (zks == null || zks.getZKDatabase() == null) {
+            return null;
+        }
+        DataNode node = zks.getZKDatabase().getDataTree().getNode(DelegationTokenStore.keyPathOf(keyId));
         return node == null ? null : node.getData();
     }
 
