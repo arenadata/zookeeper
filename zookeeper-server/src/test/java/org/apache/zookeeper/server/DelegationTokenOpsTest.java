@@ -247,7 +247,8 @@ public class DelegationTokenOpsTest extends SaslAuthDigestTestBase {
 
         ZooKeeperServer zks = serverFactory.getZooKeeperServer();
         DelegationTokenCleanupManager cleanup =
-            new DelegationTokenCleanupManager(zks.getZKDatabase(), zks.firstProcessor, 3600000);
+            new DelegationTokenCleanupManager(
+                zks.getZKDatabase(), zks.firstProcessor, zks.getDelegationTokenManager(), 3600000);
         cleanup.checkTokens();
 
         try (ZooKeeper alice = client(null)) {

@@ -94,7 +94,8 @@ public class LeaderZooKeeperServer extends QuorumZooKeeperServer {
 
     private synchronized void setupTokenCleanupManager() {
         if (DelegationTokenSecretManager.isEnabled()) {
-            tokenCleanupManager = new DelegationTokenCleanupManager(getZKDatabase(), prepRequestProcessor);
+            tokenCleanupManager = new DelegationTokenCleanupManager(
+                getZKDatabase(), prepRequestProcessor, getDelegationTokenManager());
         }
     }
 

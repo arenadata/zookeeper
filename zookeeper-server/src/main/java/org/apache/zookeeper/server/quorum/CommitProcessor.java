@@ -185,6 +185,7 @@ public class CommitProcessor extends ZooKeeperCriticalThread implements RequestP
         case OpCode.getDelegationToken:
         case OpCode.renewDelegationToken:
         case OpCode.cancelDelegationToken:
+        case OpCode.rollDelegationTokenKey:
             return true;
         case OpCode.sync:
             return matchSyncs;

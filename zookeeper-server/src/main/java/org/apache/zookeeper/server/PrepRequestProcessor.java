@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
@@ -346,6 +347,10 @@ public class PrepRequestProcessor extends ZooKeeperCriticalThread implements Req
         }
         case OpCode.cancelDelegationToken: {
             pRequest2TxnCancelDelegationToken(request, zxid, (CancelDelegationTokenRequest) record);
+            break;
+        }
+        case OpCode.rollDelegationTokenKey: {
+            pRequest2TxnRollDelegationTokenKey(request, zxid);
             break;
         }
         case OpCode.deleteContainer: {
@@ -770,10 +775,6 @@ public class PrepRequestProcessor extends ZooKeeperCriticalThread implements Req
             path = DelegationTokenStore.pathOf(sequence);
         } while (tokenPathExists(path));
 
-        DelegationTokenIdentifier ident = new DelegationTokenIdentifier(
-            owner, tokenRequest.getRenewer(), "", now, maxDate, sequence, 1);
-        byte[] entry = DelegationTokenStore.encodeEntry(expiry, ident.toBytes());
-
         List<Txn> txns = new ArrayList<>();
         ChangeRecord tokenParent;
         try {
@@ -783,24 +784,7 @@ public class PrepRequestProcessor extends ZooKeeperCriticalThread implements Req
         }
         if (tokenParent == null) {
             // first issuance ever: create /zookeeper/token in the same txn
-            ChangeRecord zkRoot = getRecordForPath(Quotas.procZookeeper);
-            int rootCVersion = zkRoot.stat.getCversion() + 1;
-            txns.add(serializedTxn(OpCode.create,
-                new CreateTxn(DelegationTokenStore.TOKEN_NODE, new byte[0], ZooDefs.Ids.READ_ACL_UNSAFE, false, rootCVersion)));
-            zkRoot = zkRoot.duplicate(zxid);
-            zkRoot.childCount++;
-            zkRoot.stat.setCversion(rootCVersion);
-            zkRoot.stat.setPzxid(zxid);
-            zkRoot.precalculatedDigest = precalculateDigest(
-                DigestOpCode.UPDATE, Quotas.procZookeeper, zkRoot.data, zkRoot.stat);
-            addChangeRecord(zkRoot);
-
-            StatPersisted parentStat = DataTree.createStat(zxid, now, 0);
-            tokenParent = new ChangeRecord(zxid, DelegationTokenStore.TOKEN_NODE, parentStat, 0, ZooDefs.Ids.READ_ACL_UNSAFE);
-            tokenParent.data = new byte[0];
-            tokenParent.precalculatedDigest = precalculateDigest(
-                DigestOpCode.ADD, DelegationTokenStore.TOKEN_NODE, tokenParent.data, parentStat);
-            addChangeRecord(tokenParent);
+            tokenParent = createTokenParent(txns, zxid, now);
         } else if (!ZooDefs.Ids.READ_ACL_UNSAFE.equals(tokenParent.acl)) {
             // heal a token parent that was pre-created with a different ACL
             int newAversion = tokenParent.stat.getAversion() + 1;
@@ -813,6 +797,25 @@ public class PrepRequestProcessor extends ZooKeeperCriticalThread implements Req
                 DigestOpCode.UPDATE, DelegationTokenStore.TOKEN_NODE, tokenParent.data, tokenParent.stat);
             addChangeRecord(tokenParent);
         }
+
+        int masterKeyId = DelegationTokenSecretManager.STATIC_KEY_ID;
+        if (tokenManager.isKeyRotationEnabled()) {
+            TokenKeyInfo currentKey = newestValidKey(tokenKeys(), now);
+            if (currentKey == null) {
+                // no usable signing key yet: create the first one in the same txn
+                ensureKeysParent(txns, zxid, now);
+                masterKeyId = nextKeyId(tokenKeys());
+                appendKeyCreate(txns, zxid, now, masterKeyId,
+                    DelegationTokenStore.encodeKeyEntry(now, tokenManager.newKeyExpiry(now), tokenManager.generateKeyBytes()));
+            } else {
+                masterKeyId = currentKey.id;
+            }
+            tokenParent = getRecordForPath(DelegationTokenStore.TOKEN_NODE);
+        }
+
+        DelegationTokenIdentifier ident = new DelegationTokenIdentifier(
+            owner, tokenRequest.getRenewer(), "", now, maxDate, sequence, masterKeyId);
+        byte[] entry = DelegationTokenStore.encodeEntry(expiry, ident.toBytes());
 
         int parentCVersion = tokenParent.stat.getCversion() + 1;
         txns.add(serializedTxn(OpCode.create,
@@ -836,6 +839,211 @@ public class PrepRequestProcessor extends ZooKeeperCriticalThread implements Req
         if (digestEnabled) {
             setTxnDigest(request);
         }
+    }
+
+    /**
+     * Rolls the token master key: creates the next key znode and prunes keys
+     * past their expiry. Internal-only (posted by the leader-side cleanup with
+     * sessionId 0); replicated as a multi of plain create/delete sub-txns.
+     */
+    private void pRequest2TxnRollDelegationTokenKey(Request request, long zxid) throws KeeperException, IOException {
+        DelegationTokenSecretManager tokenManager = requireTokenManager();
+        if (request.sessionId != 0 || !DelegationTokenStore.isSuper(request.authInfo)) {
+            throw new KeeperException.NoAuthException();
+        }
+        if (!tokenManager.isKeyRotationEnabled()) {
+            throw new KeeperException.UnimplementedException();
+        }
+        long now = request.getHdr().getTime();
+        List<Txn> txns = new ArrayList<>();
+        try {
+            getRecordForPath(DelegationTokenStore.TOKEN_NODE);
+        } catch (KeeperException.NoNodeException e) {
+            createTokenParent(txns, zxid, now);
+        }
+        ensureKeysParent(txns, zxid, now);
+        List<TokenKeyInfo> keys = tokenKeys();
+        appendKeyCreate(txns, zxid, now, nextKeyId(keys),
+            DelegationTokenStore.encodeKeyEntry(now, tokenManager.newKeyExpiry(now), tokenManager.generateKeyBytes()));
+        for (TokenKeyInfo key : keys) {
+            if (key.expiry < now) {
+                appendKeyDelete(txns, zxid, key.id);
+            }
+        }
+        request.setHdr(new TxnHeader(request.sessionId, request.cxid, zxid, now, OpCode.multi));
+        request.setTxn(new MultiTxn(txns));
+        if (digestEnabled) {
+            setTxnDigest(request);
+        }
+    }
+
+    private ChangeRecord createTokenParent(List<Txn> txns, long zxid, long now) throws KeeperException, IOException {
+        ChangeRecord zkRoot = getRecordForPath(Quotas.procZookeeper);
+        int rootCVersion = zkRoot.stat.getCversion() + 1;
+        txns.add(serializedTxn(OpCode.create,
+            new CreateTxn(DelegationTokenStore.TOKEN_NODE, new byte[0], ZooDefs.Ids.READ_ACL_UNSAFE, false, rootCVersion)));
+        zkRoot = zkRoot.duplicate(zxid);
+        zkRoot.childCount++;
+        zkRoot.stat.setCversion(rootCVersion);
+        zkRoot.stat.setPzxid(zxid);
+        zkRoot.precalculatedDigest = precalculateDigest(
+            DigestOpCode.UPDATE, Quotas.procZookeeper, zkRoot.data, zkRoot.stat);
+        addChangeRecord(zkRoot);
+
+        StatPersisted parentStat = DataTree.createStat(zxid, now, 0);
+        ChangeRecord tokenParent = new ChangeRecord(
+            zxid, DelegationTokenStore.TOKEN_NODE, parentStat, 0, ZooDefs.Ids.READ_ACL_UNSAFE);
+        tokenParent.data = new byte[0];
+        tokenParent.precalculatedDigest = precalculateDigest(
+            DigestOpCode.ADD, DelegationTokenStore.TOKEN_NODE, tokenParent.data, parentStat);
+        addChangeRecord(tokenParent);
+        return tokenParent;
+    }
+
+    private ChangeRecord ensureKeysParent(List<Txn> txns, long zxid, long now) throws KeeperException, IOException {
+        try {
+            return getRecordForPath(DelegationTokenStore.KEY_NODE);
+        } catch (KeeperException.NoNodeException e) {
+            // fall through and create it
+        }
+        ChangeRecord tokenParent = getRecordForPath(DelegationTokenStore.TOKEN_NODE);
+        int parentCVersion = tokenParent.stat.getCversion() + 1;
+        txns.add(serializedTxn(OpCode.create,
+            new CreateTxn(DelegationTokenStore.KEY_NODE, new byte[0], DelegationTokenStore.KEY_ACL, false, parentCVersion)));
+        tokenParent = tokenParent.duplicate(zxid);
+        tokenParent.childCount++;
+        tokenParent.stat.setCversion(parentCVersion);
+        tokenParent.stat.setPzxid(zxid);
+        tokenParent.precalculatedDigest = precalculateDigest(
+            DigestOpCode.UPDATE, DelegationTokenStore.TOKEN_NODE, tokenParent.data, tokenParent.stat);
+        addChangeRecord(tokenParent);
+
+        StatPersisted keysStat = DataTree.createStat(zxid, now, 0);
+        ChangeRecord keysParent = new ChangeRecord(
+            zxid, DelegationTokenStore.KEY_NODE, keysStat, 0, DelegationTokenStore.KEY_ACL);
+        keysParent.data = new byte[0];
+        keysParent.precalculatedDigest = precalculateDigest(
+            DigestOpCode.ADD, DelegationTokenStore.KEY_NODE, keysParent.data, keysStat);
+        addChangeRecord(keysParent);
+        return keysParent;
+    }
+
+    private void appendKeyCreate(List<Txn> txns, long zxid, long now, int keyId, byte[] keyEntry)
+        throws KeeperException, IOException {
+        String path = DelegationTokenStore.keyPathOf(keyId);
+        ChangeRecord keysParent = getRecordForPath(DelegationTokenStore.KEY_NODE);
+        int parentCVersion = keysParent.stat.getCversion() + 1;
+        txns.add(serializedTxn(OpCode.create,
+            new CreateTxn(path, keyEntry, DelegationTokenStore.KEY_ACL, false, parentCVersion)));
+        keysParent = keysParent.duplicate(zxid);
+        keysParent.childCount++;
+        keysParent.stat.setCversion(parentCVersion);
+        keysParent.stat.setPzxid(zxid);
+        keysParent.precalculatedDigest = precalculateDigest(
+            DigestOpCode.UPDATE, DelegationTokenStore.KEY_NODE, keysParent.data, keysParent.stat);
+        addChangeRecord(keysParent);
+
+        StatPersisted keyStat = DataTree.createStat(zxid, now, 0);
+        ChangeRecord keyRecord = new ChangeRecord(zxid, path, keyStat, 0, DelegationTokenStore.KEY_ACL);
+        keyRecord.data = keyEntry;
+        keyRecord.precalculatedDigest = precalculateDigest(DigestOpCode.ADD, path, keyEntry, keyStat);
+        addChangeRecord(keyRecord);
+    }
+
+    private void appendKeyDelete(List<Txn> txns, long zxid, int keyId) throws KeeperException, IOException {
+        String path = DelegationTokenStore.keyPathOf(keyId);
+        txns.add(serializedTxn(OpCode.delete, new DeleteTxn(path)));
+        ChangeRecord keysParent = getRecordForPath(DelegationTokenStore.KEY_NODE);
+        keysParent = keysParent.duplicate(zxid);
+        keysParent.childCount--;
+        keysParent.stat.setPzxid(zxid);
+        keysParent.precalculatedDigest = precalculateDigest(
+            DigestOpCode.UPDATE, DelegationTokenStore.KEY_NODE, keysParent.data, keysParent.stat);
+        addChangeRecord(keysParent);
+        ChangeRecord deleted = new ChangeRecord(zxid, path, null, -1, null);
+        deleted.precalculatedDigest = precalculateDigest(DigestOpCode.REMOVE, path);
+        addChangeRecord(deleted);
+    }
+
+    private static final class TokenKeyInfo {
+
+        final int id;
+        final long created;
+        final long expiry;
+
+        TokenKeyInfo(int id, long created, long expiry) {
+            this.id = id;
+            this.created = created;
+            this.expiry = expiry;
+        }
+
+    }
+
+    /**
+     * Lists master keys visible to this prep pass: the data tree merged with
+     * outstanding (not yet committed) key creations and deletions.
+     */
+    private List<TokenKeyInfo> tokenKeys() {
+        Set<String> paths = new HashSet<>();
+        DataNode keysNode = zks.getZKDatabase().getDataTree().getNode(DelegationTokenStore.KEY_NODE);
+        if (keysNode != null) {
+            synchronized (keysNode) {
+                for (String child : keysNode.getChildren()) {
+                    paths.add(DelegationTokenStore.KEY_NODE + "/" + child);
+                }
+            }
+        }
+        synchronized (zks.outstandingChanges) {
+            for (String path : zks.outstandingChangesForPath.keySet()) {
+                if (path.startsWith(DelegationTokenStore.KEY_NODE_PREFIX)) {
+                    paths.add(path);
+                }
+            }
+        }
+        List<TokenKeyInfo> keys = new ArrayList<>();
+        for (String path : paths) {
+            if (!path.startsWith(DelegationTokenStore.KEY_NODE_PREFIX)) {
+                continue;
+            }
+            int keyId;
+            try {
+                keyId = Integer.parseInt(path.substring(DelegationTokenStore.KEY_NODE_PREFIX.length()));
+            } catch (NumberFormatException e) {
+                continue;
+            }
+            ChangeRecord record;
+            try {
+                record = getRecordForPath(path);
+            } catch (KeeperException.NoNodeException e) {
+                continue;
+            }
+            try {
+                keys.add(new TokenKeyInfo(keyId,
+                    DelegationTokenStore.keyEntryCreated(record.data),
+                    DelegationTokenStore.keyEntryExpiry(record.data)));
+            } catch (IOException e) {
+                LOG.warn("Skipping malformed delegation token key entry {}", path);
+            }
+        }
+        return keys;
+    }
+
+    private static TokenKeyInfo newestValidKey(List<TokenKeyInfo> keys, long now) {
+        TokenKeyInfo newest = null;
+        for (TokenKeyInfo key : keys) {
+            if (key.expiry > now && (newest == null || key.id > newest.id)) {
+                newest = key;
+            }
+        }
+        return newest;
+    }
+
+    private static int nextKeyId(List<TokenKeyInfo> keys) {
+        int next = DelegationTokenSecretManager.FIRST_GENERATED_KEY_ID;
+        for (TokenKeyInfo key : keys) {
+            next = Math.max(next, key.id + 1);
+        }
+        return next;
     }
 
     private void pRequest2TxnRenewDelegationToken(Request request, long zxid, RenewDelegationTokenRequest renewRequest) throws KeeperException, IOException {
@@ -1026,6 +1234,9 @@ public class PrepRequestProcessor extends ZooKeeperCriticalThread implements Req
             case OpCode.cancelDelegationToken:
                 CancelDelegationTokenRequest cancelTokenRequest = request.readRequestRecord(CancelDelegationTokenRequest::new);
                 pRequest2Txn(request.type, zks.getNextZxid(), request, cancelTokenRequest);
+                break;
+            case OpCode.rollDelegationTokenKey:
+                pRequest2Txn(request.type, zks.getNextZxid(), request, null);
                 break;
             case OpCode.reconfig:
                 ReconfigRequest reconfigRequest = request.readRequestRecord(ReconfigRequest::new);

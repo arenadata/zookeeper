@@ -82,6 +82,7 @@ import org.apache.zookeeper.proto.SyncResponse;
 import org.apache.zookeeper.proto.WhoAmIResponse;
 import org.apache.zookeeper.server.DataTree.ProcessTxnResult;
 import org.apache.zookeeper.server.quorum.QuorumZooKeeperServer;
+import org.apache.zookeeper.server.token.DelegationTokenIdentifier;
 import org.apache.zookeeper.server.token.DelegationTokenSecretManager;
 import org.apache.zookeeper.server.token.DelegationTokenStore;
 import org.apache.zookeeper.server.util.AuthUtil;
@@ -360,7 +361,7 @@ public class FinalRequestProcessor implements RequestProcessor {
                 byte[] identifier = DelegationTokenStore.entryIdentifier(entry);
                 rsp = new GetDelegationTokenResponse(
                     identifier,
-                    tokenManager.computePassword(identifier),
+                    tokenPassword(tokenManager, identifier),
                     DelegationTokenStore.entryExpiry(entry));
                 err = Code.get(rc.err);
                 break;
@@ -722,6 +723,25 @@ public class FinalRequestProcessor implements RequestProcessor {
             }
         }
         throw new IOException("getDelegationToken txn carries no token create sub-txn");
+    }
+
+    /**
+     * Derives the token password with the key referenced by the identifier:
+     * the static file key for {@link DelegationTokenSecretManager#STATIC_KEY_ID},
+     * a rotated key from the store otherwise. Runs after the issuance txn is
+     * applied, so a key created in the same txn is already in the tree.
+     */
+    private byte[] tokenPassword(DelegationTokenSecretManager tokenManager, byte[] identifier) throws IOException {
+        int keyId = DelegationTokenIdentifier.fromBytes(identifier).getMasterKeyId();
+        if (keyId == DelegationTokenSecretManager.STATIC_KEY_ID) {
+            return tokenManager.computePassword(identifier);
+        }
+        DataNode keyNode = zks.getZKDatabase().getDataTree().getNode(DelegationTokenStore.keyPathOf(keyId));
+        if (keyNode == null) {
+            throw new IOException("delegation token signing key " + keyId + " is not in the store");
+        }
+        return DelegationTokenSecretManager.computePassword(
+            DelegationTokenStore.keyEntryBytes(keyNode.getData()), identifier);
     }
 
     private void updateStats(Request request, String lastOp, long lastZxid) {

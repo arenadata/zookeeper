@@ -374,6 +374,7 @@ public class Request {
         case OpCode.getDelegationToken:
         case OpCode.renewDelegationToken:
         case OpCode.cancelDelegationToken:
+        case OpCode.rollDelegationTokenKey:
             return true;
         case OpCode.closeSession:
         case OpCode.createSession:
@@ -457,6 +458,8 @@ public class Request {
                 return "renewDelegationToken";
             case OpCode.cancelDelegationToken:
                 return "cancelDelegationToken";
+            case OpCode.rollDelegationTokenKey:
+                return "rollDelegationTokenKey";
             default:
                 return "unknown " + op;
         }

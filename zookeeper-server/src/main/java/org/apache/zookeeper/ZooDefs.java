@@ -101,6 +101,9 @@ public class ZooDefs {
 
         int cancelDelegationToken = 122;
 
+        /** Internal-only: posted by the leader to roll the token master key. */
+        int rollDelegationTokenKey = 123;
+
         int createSession = -10;
 
         int closeSession = -11;

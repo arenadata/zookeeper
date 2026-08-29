@@ -180,7 +180,8 @@ public class ZooKeeperServerMain {
             );
             containerManager.start();
             if (DelegationTokenSecretManager.isEnabled()) {
-                tokenCleanupManager = new DelegationTokenCleanupManager(zkServer.getZKDatabase(), zkServer.firstProcessor);
+                tokenCleanupManager = new DelegationTokenCleanupManager(
+                    zkServer.getZKDatabase(), zkServer.firstProcessor, zkServer.getDelegationTokenManager());
                 tokenCleanupManager.start();
             }
             ZKAuditProvider.addZKStartStopAuditLog();

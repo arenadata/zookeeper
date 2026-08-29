@@ -38,11 +38,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Removes expired delegation tokens from the store. Modeled after
+ * Removes expired delegation tokens from the store and, with key rotation
+ * enabled, keeps the master key fresh. Modeled after
  * {@link org.apache.zookeeper.server.ContainerManager}: meant to run on the
  * leader (or a standalone server), periodically scans the token znodes and
- * posts internal cancel requests through the normal request pipeline, so the
- * deletions replicate as ordinary delete transactions.
+ * posts internal cancel/roll requests through the normal request pipeline, so
+ * the changes replicate as ordinary transactions.
  */
 public class DelegationTokenCleanupManager {
 
@@ -57,17 +58,22 @@ public class DelegationTokenCleanupManager {
 
     private final ZKDatabase zkDb;
     private final RequestProcessor requestProcessor;
+    private final DelegationTokenSecretManager tokenManager;
     private final long checkIntervalMs;
     private final Timer timer;
     private final AtomicReference<TimerTask> task = new AtomicReference<>(null);
 
-    public DelegationTokenCleanupManager(ZKDatabase zkDb, RequestProcessor requestProcessor) {
-        this(zkDb, requestProcessor, Long.getLong(TOKEN_AUTH_CLEANUP_INTERVAL, DEFAULT_CLEANUP_INTERVAL_MS));
+    public DelegationTokenCleanupManager(
+        ZKDatabase zkDb, RequestProcessor requestProcessor, DelegationTokenSecretManager tokenManager) {
+        this(zkDb, requestProcessor, tokenManager, Long.getLong(TOKEN_AUTH_CLEANUP_INTERVAL, DEFAULT_CLEANUP_INTERVAL_MS));
     }
 
-    public DelegationTokenCleanupManager(ZKDatabase zkDb, RequestProcessor requestProcessor, long checkIntervalMs) {
+    public DelegationTokenCleanupManager(
+        ZKDatabase zkDb, RequestProcessor requestProcessor, DelegationTokenSecretManager tokenManager,
+        long checkIntervalMs) {
         this.zkDb = zkDb;
         this.requestProcessor = requestProcessor;
+        this.tokenManager = tokenManager;
         this.checkIntervalMs = checkIntervalMs;
         timer = new Timer("DelegationTokenCleanupTask", true);
         LOG.info("Using checkIntervalMs={}", checkIntervalMs);
@@ -83,6 +89,7 @@ public class DelegationTokenCleanupManager {
                 public void run() {
                     try {
                         checkTokens();
+                        checkKeys();
                     } catch (Throwable e) {
                         LOG.error("Error checking delegation tokens", e);
                     }
@@ -120,6 +127,9 @@ public class DelegationTokenCleanupManager {
         }
         long now = Time.currentWallTime();
         for (String child : children) {
+            if (!child.startsWith("DT_")) {
+                continue;
+            }
             String path = DelegationTokenStore.TOKEN_NODE + "/" + child;
             DataNode node = zkDb.getDataTree().getNode(path);
             if (node == null) {
@@ -147,6 +157,52 @@ public class DelegationTokenCleanupManager {
             } catch (Exception e) {
                 LOG.error("Could not cancel expired delegation token {}", path, e);
             }
+        }
+    }
+
+    /**
+     * Checks master key freshness once and posts a roll request when the
+     * newest valid key is missing or older than the roll interval. Public so
+     * tests can trigger a pass directly.
+     */
+    public void checkKeys() {
+        if (tokenManager == null || !tokenManager.isKeyRotationEnabled()) {
+            return;
+        }
+        long now = Time.currentWallTime();
+        long newestValidCreated = -1;
+        DataNode parent = zkDb.getDataTree().getNode(DelegationTokenStore.KEY_NODE);
+        if (parent != null) {
+            List<String> children;
+            synchronized (parent) {
+                children = new ArrayList<>(parent.getChildren());
+            }
+            for (String child : children) {
+                String path = DelegationTokenStore.KEY_NODE + "/" + child;
+                DataNode node = zkDb.getDataTree().getNode(path);
+                if (node == null) {
+                    continue;
+                }
+                try {
+                    byte[] entry = node.getData();
+                    if (DelegationTokenStore.keyEntryExpiry(entry) > now) {
+                        newestValidCreated = Math.max(newestValidCreated, DelegationTokenStore.keyEntryCreated(entry));
+                    }
+                } catch (IOException e) {
+                    LOG.warn("Skipping malformed delegation token key entry {}", path);
+                }
+            }
+        }
+        if (newestValidCreated >= 0 && now < newestValidCreated + tokenManager.getKeyRollIntervalMs()) {
+            return;
+        }
+        Request request = new Request(
+            null, 0, 0, OpCode.rollDelegationTokenKey, RequestRecord.fromBytes(new byte[0]), SYSTEM_AUTH_INFO);
+        try {
+            LOG.info("Rolling delegation token master key");
+            postCancelRequest(request);
+        } catch (Exception e) {
+            LOG.error("Could not roll delegation token master key", e);
         }
     }
 
