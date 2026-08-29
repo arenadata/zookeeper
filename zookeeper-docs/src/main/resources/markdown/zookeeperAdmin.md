@@ -1916,11 +1916,15 @@ and super users. The leader periodically cancels expired tokens. The
 delegation token provider (`spark.zookeeper.quorum` enables it at submit).
 
 Security notes: DIGEST-MD5 is cryptographically weak — expose the token path
-only over TLS (`secureClientPort`); delegation tokens do not work in FIPS
-mode, which disables DIGEST-MD5 entirely. In a rolling upgrade enable
-`tokenAuth.enabled` only after the whole ensemble runs the new version. A
-freshly issued token can be briefly rejected by a follower that has not yet
-applied the issuing transaction.
+only over TLS (`secureClientPort`). Clients can switch to SCRAM-SHA-256
+instead by setting `zookeeper.sasl.client.mechanism=SCRAM-SHA-256`
+(client-side, no server configuration needed — the server picks the
+mechanism from the first SASL packet): SCRAM uses only SHA-256 primitives
+and works with FIPS mode on, while DIGEST-MD5 clients are refused in FIPS
+mode. Static JAAS users and delegation tokens authenticate over either
+mechanism. In a rolling upgrade enable `tokenAuth.enabled` only after the
+whole ensemble runs the new version. A freshly issued token can be briefly
+rejected by a follower that has not yet applied the issuing transaction.
 
 * *tokenAuth.enabled* :
     (Java system property: **zookeeper.tokenAuth.enabled**)
