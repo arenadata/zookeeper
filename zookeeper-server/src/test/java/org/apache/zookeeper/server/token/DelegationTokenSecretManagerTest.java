@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -46,6 +47,7 @@ public class DelegationTokenSecretManagerTest {
     public void clearProperties() {
         System.clearProperty(DelegationTokenSecretManager.TOKEN_AUTH_ENABLED);
         System.clearProperty(DelegationTokenSecretManager.TOKEN_AUTH_SECRET_FILE);
+        System.clearProperty(DelegationTokenSecretManager.TOKEN_AUTH_KEY_ROTATION_ENABLED);
     }
 
     @Test
@@ -123,6 +125,71 @@ public class DelegationTokenSecretManagerTest {
         System.setProperty(DelegationTokenSecretManager.TOKEN_AUTH_ENABLED, "true");
         System.setProperty(DelegationTokenSecretManager.TOKEN_AUTH_SECRET_FILE, secretFile.toString());
         assertThrows(IOException.class, DelegationTokenSecretManager::createIfEnabled);
+    }
+
+    @Test
+    public void testRotationAllowsMissingSecretFile() throws IOException {
+        System.setProperty(DelegationTokenSecretManager.TOKEN_AUTH_ENABLED, "true");
+        System.setProperty(DelegationTokenSecretManager.TOKEN_AUTH_KEY_ROTATION_ENABLED, "true");
+
+        DelegationTokenSecretManager manager = DelegationTokenSecretManager.createIfEnabled();
+        assertNotNull(manager);
+        assertTrue(manager.isKeyRotationEnabled());
+        assertFalse(manager.hasStaticKey());
+        assertThrows(IllegalStateException.class, () -> manager.computePassword(new byte[]{1}));
+    }
+
+    @Test
+    public void testRotationKeepsStaticKeyWhenFilePresent() throws IOException {
+        Path secretFile = tmpDir.resolve("master.key");
+        Files.write(secretFile, KEY);
+        System.setProperty(DelegationTokenSecretManager.TOKEN_AUTH_ENABLED, "true");
+        System.setProperty(DelegationTokenSecretManager.TOKEN_AUTH_SECRET_FILE, secretFile.toString());
+        System.setProperty(DelegationTokenSecretManager.TOKEN_AUTH_KEY_ROTATION_ENABLED, "true");
+
+        DelegationTokenSecretManager manager = DelegationTokenSecretManager.createIfEnabled();
+        assertNotNull(manager);
+        assertTrue(manager.isKeyRotationEnabled());
+        assertTrue(manager.hasStaticKey());
+    }
+
+    @Test
+    public void testGeneratedKeyPasswords() {
+        DelegationTokenSecretManager manager = new DelegationTokenSecretManager(null, true);
+        byte[] keyA = manager.generateKeyBytes();
+        byte[] keyB = manager.generateKeyBytes();
+        assertEquals(32, keyA.length);
+        assertFalse(Arrays.equals(keyA, keyB));
+
+        byte[] identifier = new DelegationTokenIdentifier("alice", "yarn", "", 1L, 2L, 3, 2).toBytes();
+        assertArrayEquals(DelegationTokenSecretManager.computePassword(keyA, identifier),
+            DelegationTokenSecretManager.computePassword(keyA, identifier));
+        assertFalse(Arrays.equals(DelegationTokenSecretManager.computePassword(keyA, identifier),
+            DelegationTokenSecretManager.computePassword(keyB, identifier)));
+        // static-key derivation matches the explicit-key overload for the same bytes
+        assertArrayEquals(new DelegationTokenSecretManager(KEY).computePassword(identifier),
+            DelegationTokenSecretManager.computePassword(KEY, identifier));
+    }
+
+    @Test
+    public void testNewKeyExpiryCoversTokenLifetime() {
+        DelegationTokenSecretManager manager = new DelegationTokenSecretManager(null, true);
+        long now = System.currentTimeMillis();
+        assertEquals(now + manager.getKeyRollIntervalMs() + manager.getMaxLifetimeMs(), manager.newKeyExpiry(now));
+    }
+
+    @Test
+    public void testKeyEntryCodec() throws IOException {
+        byte[] entry = DelegationTokenStore.encodeKeyEntry(11L, 22L, KEY);
+        assertEquals(11L, DelegationTokenStore.keyEntryCreated(entry));
+        assertEquals(22L, DelegationTokenStore.keyEntryExpiry(entry));
+        assertArrayEquals(KEY, DelegationTokenStore.keyEntryBytes(entry));
+
+        assertThrows(IOException.class, () -> DelegationTokenStore.keyEntryExpiry(null));
+        assertThrows(IOException.class, () -> DelegationTokenStore.keyEntryExpiry(new byte[]{1, 2, 3}));
+        byte[] wrongVersion = DelegationTokenStore.encodeKeyEntry(11L, 22L, KEY);
+        wrongVersion[0] = 9;
+        assertThrows(IOException.class, () -> DelegationTokenStore.keyEntryBytes(wrongVersion));
     }
 
 }

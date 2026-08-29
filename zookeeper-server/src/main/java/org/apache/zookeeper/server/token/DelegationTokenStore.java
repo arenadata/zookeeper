@@ -21,7 +21,10 @@ package org.apache.zookeeper.server.token;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import org.apache.zookeeper.ZooDefs;
+import org.apache.zookeeper.data.ACL;
 import org.apache.zookeeper.data.Id;
 
 /**
@@ -38,11 +41,24 @@ public final class DelegationTokenStore {
     public static final String TOKEN_NODE = "/zookeeper/token";
     public static final String TOKEN_NODE_PREFIX = TOKEN_NODE + "/DT_";
 
+    public static final String KEY_NODE = TOKEN_NODE + "/keys";
+    public static final String KEY_NODE_PREFIX = KEY_NODE + "/K_";
+
+    /**
+     * ACL of the key znodes: no permissions for anyone, so only the server
+     * itself (internal reads bypass ACLs) and super sessions can see key bytes.
+     */
+    public static final List<ACL> KEY_ACL =
+        Collections.singletonList(new ACL(0, ZooDefs.Ids.ANYONE_ID_UNSAFE));
+
     /** AuthInfo scheme marking a session as token-authenticated. */
     public static final String TOKEN_AUTH_SCHEME = "token";
 
     private static final byte ENTRY_VERSION = 1;
     private static final int ENTRY_HEADER_LENGTH = 1 + 8;
+
+    private static final byte KEY_ENTRY_VERSION = 1;
+    private static final int KEY_ENTRY_HEADER_LENGTH = 1 + 8 + 8;
 
     /**
      * Read access to stored token entries, keyed by the identifier sequence
@@ -51,6 +67,16 @@ public final class DelegationTokenStore {
     public interface EntryReader {
 
         byte[] entry(int sequenceNumber);
+
+    }
+
+    /**
+     * Read access to stored master key entries, keyed by the key id; returns
+     * null when the key is not in the store.
+     */
+    public interface KeyReader {
+
+        byte[] keyEntry(int keyId);
 
     }
 
@@ -80,6 +106,37 @@ public final class DelegationTokenStore {
     private static void checkEntry(byte[] entry) throws IOException {
         if (entry == null || entry.length <= ENTRY_HEADER_LENGTH || entry[0] != ENTRY_VERSION) {
             throw new IOException("malformed delegation token store entry");
+        }
+    }
+
+    public static String keyPathOf(int keyId) {
+        return KEY_NODE_PREFIX + keyId;
+    }
+
+    public static byte[] encodeKeyEntry(long createdTime, long expiryTime, byte[] keyBytes) {
+        ByteBuffer buffer = ByteBuffer.allocate(KEY_ENTRY_HEADER_LENGTH + keyBytes.length);
+        buffer.put(KEY_ENTRY_VERSION).putLong(createdTime).putLong(expiryTime).put(keyBytes);
+        return buffer.array();
+    }
+
+    public static long keyEntryCreated(byte[] entry) throws IOException {
+        checkKeyEntry(entry);
+        return ByteBuffer.wrap(entry, 1, 8).getLong();
+    }
+
+    public static long keyEntryExpiry(byte[] entry) throws IOException {
+        checkKeyEntry(entry);
+        return ByteBuffer.wrap(entry, 9, 8).getLong();
+    }
+
+    public static byte[] keyEntryBytes(byte[] entry) throws IOException {
+        checkKeyEntry(entry);
+        return Arrays.copyOfRange(entry, KEY_ENTRY_HEADER_LENGTH, entry.length);
+    }
+
+    private static void checkKeyEntry(byte[] entry) throws IOException {
+        if (entry == null || entry.length <= KEY_ENTRY_HEADER_LENGTH || entry[0] != KEY_ENTRY_VERSION) {
+            throw new IOException("malformed delegation token key entry");
         }
     }
 
