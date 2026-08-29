@@ -1925,17 +1925,42 @@ applied the issuing transaction.
 * *tokenAuth.enabled* :
     (Java system property: **zookeeper.tokenAuth.enabled**)
     Enables delegation token authentication and the token operations.
-    Must be set (with the same master key) on every ensemble member.
+    Must be set (with the same key configuration) on every ensemble
+    member.
     Default: **false**
 
 * *tokenAuth.secretFile* :
     (Java system property: **zookeeper.tokenAuth.secretFile**)
-    Path to the master key file, required when token support is enabled;
-    the server refuses to start without a usable key. The file content is
-    trimmed and used as the HMAC key (minimum 16 bytes). It must be
-    identical on all ensemble members and readable only by the ZooKeeper
-    process. Key rotation is a config change plus a rolling restart;
-    tokens issued under the old key stop authenticating.
+    Path to the static master key file, required when token support is
+    enabled and key rotation is off; the server refuses to start without
+    a usable key. The file content is trimmed and used as the HMAC key
+    (minimum 16 bytes). It must be identical on all ensemble members and
+    readable only by the ZooKeeper process. Replacing the file is a
+    config change plus a rolling restart; tokens issued under the old
+    key stop authenticating. With key rotation enabled the file is
+    optional and only validates tokens issued before rotation was turned
+    on.
+
+* *tokenAuth.keyRotationEnabled* :
+    (Java system property: **zookeeper.tokenAuth.keyRotationEnabled**)
+    Enables automatic master key rotation. The leader generates random
+    signing keys, replicates them as znodes under
+    `/zookeeper/token/keys` (not readable by clients) and rolls them
+    every `keyRollIntervalMs`; each token records the id of the key that
+    signed it, and old keys are kept until every token they signed has
+    passed its maximum lifetime, then pruned. New tokens are always
+    signed with the newest key, so a leaked key ages out on its own.
+    Because signing keys live in the data tree, snapshots and
+    transaction logs contain them — treat backups as secrets. Must be
+    set consistently on every ensemble member.
+    Default: **false**
+
+* *tokenAuth.keyRollIntervalMs* :
+    (Java system property: **zookeeper.tokenAuth.keyRollIntervalMs**)
+    How often the leader replaces the signing key when key rotation is
+    enabled. Rolls piggyback on the cleanup pass, so the effective
+    period is rounded up to `cleanupIntervalMs`.
+    Default: **86400000** (24 hours)
 
 * *tokenAuth.renewIntervalMs* :
     (Java system property: **zookeeper.tokenAuth.renewIntervalMs**)
