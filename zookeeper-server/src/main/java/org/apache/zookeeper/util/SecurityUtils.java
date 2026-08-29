@@ -28,9 +28,12 @@ import javax.security.sasl.SaslClient;
 import javax.security.sasl.SaslException;
 import javax.security.sasl.SaslServer;
 import org.apache.zookeeper.SaslClientCallbackHandler;
+import org.apache.zookeeper.client.ZKClientConfig;
 import org.apache.zookeeper.common.X509Util;
 import org.apache.zookeeper.common.ZKConfig;
 import org.apache.zookeeper.server.auth.KerberosName;
+import org.apache.zookeeper.util.scram.ScramFormatter;
+import org.apache.zookeeper.util.scram.ScramSaslClient;
 import org.ietf.jgss.GSSContext;
 import org.ietf.jgss.GSSCredential;
 import org.ietf.jgss.GSSException;
@@ -66,10 +69,23 @@ public final class SecurityUtils {
         final String entity) throws SaslException {
         SaslClient saslClient;
         // Use subject.getPrincipals().isEmpty() as an indication of which SASL
-        // mechanism to use: if empty, use DIGEST-MD5; otherwise, use GSSAPI.
+        // mechanism to use: if empty, use DIGEST-MD5 or SCRAM; otherwise, use GSSAPI.
         if (subject.getPrincipals().isEmpty()) {
-            // no principals: must not be GSSAPI: use DIGEST-MD5 mechanism
-            // instead.
+            String username = (String) (subject.getPublicCredentials().toArray()[0]);
+            String password = (String) (subject.getPrivateCredentials().toArray()[0]);
+            // the mechanism switch is a ZooKeeper client setting; quorum SASL stays DIGEST-MD5
+            String mechanism = config instanceof ZKClientConfig
+                ? config.getProperty(
+                    ZKClientConfig.ZK_SASL_CLIENT_MECHANISM, ZKClientConfig.ZK_SASL_CLIENT_MECHANISM_DEFAULT)
+                : ZKClientConfig.ZK_SASL_CLIENT_MECHANISM_DEFAULT;
+            if (ScramFormatter.MECHANISM.equals(mechanism)) {
+                // FIPS-compatible: SHA-256 primitives only
+                LOG.info("{} will use SCRAM-SHA-256 as SASL mechanism.", entity);
+                return new ScramSaslClient(username, password.toCharArray());
+            }
+            if (!"DIGEST-MD5".equals(mechanism)) {
+                throw new SaslException("unsupported SASL client mechanism: " + mechanism);
+            }
             // FIPS-mode: don't try DIGEST-MD5, just return error
             if (X509Util.getFipsMode(config)) {
                 LOG.warn("{} will not use DIGEST-MD5 as SASL mechanism, because FIPS mode is enabled.", entity);
@@ -77,8 +93,6 @@ public final class SecurityUtils {
             }
             LOG.info("{} will use DIGEST-MD5 as SASL mechanism.", entity);
             String[] mechs = {"DIGEST-MD5"};
-            String username = (String) (subject.getPublicCredentials().toArray()[0]);
-            String password = (String) (subject.getPrivateCredentials().toArray()[0]);
             // 'domain' parameter is hard-wired between the server and client
             saslClient = Sasl.createSaslClient(mechs, username, protocol, serverName, null, new SaslClientCallbackHandler(password, entity));
             return saslClient;

@@ -40,6 +40,9 @@ public class ZKClientConfig extends ZKConfig {
     public static final String LOGIN_CONTEXT_NAME_KEY_DEFAULT = "Client";
     public static final String ENABLE_CLIENT_SASL_KEY = "zookeeper.sasl.client";
     public static final String ENABLE_CLIENT_SASL_DEFAULT = "true";
+    /** Non-GSSAPI client mechanism: DIGEST-MD5 (default) or SCRAM-SHA-256. */
+    public static final String ZK_SASL_CLIENT_MECHANISM = "zookeeper.sasl.client.mechanism";
+    public static final String ZK_SASL_CLIENT_MECHANISM_DEFAULT = "DIGEST-MD5";
     public static final String ZOOKEEPER_SERVER_REALM = "zookeeper.server.realm";
     /**
      * This controls whether automatic watch resetting is enabled. Clients
@@ -113,6 +116,7 @@ public class ZKClientConfig extends ZKConfig {
          * backward compatibility for client specific properties
          */
         setProperty(ZK_SASL_CLIENT_USERNAME, System.getProperty(ZK_SASL_CLIENT_USERNAME));
+        setProperty(ZK_SASL_CLIENT_MECHANISM, System.getProperty(ZK_SASL_CLIENT_MECHANISM));
         setProperty(ZK_SASL_CLIENT_CANONICALIZE_HOSTNAME, System.getProperty(ZK_SASL_CLIENT_CANONICALIZE_HOSTNAME));
         setProperty(LOGIN_CONTEXT_NAME_KEY, System.getProperty(LOGIN_CONTEXT_NAME_KEY));
         setProperty(ENABLE_CLIENT_SASL_KEY, System.getProperty(ENABLE_CLIENT_SASL_KEY));

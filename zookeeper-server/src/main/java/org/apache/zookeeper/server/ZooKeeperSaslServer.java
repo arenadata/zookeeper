@@ -25,6 +25,7 @@ import javax.security.sasl.SaslServer;
 import org.apache.zookeeper.Login;
 import org.apache.zookeeper.server.auth.SaslServerCallbackHandler;
 import org.apache.zookeeper.util.SecurityUtils;
+import org.apache.zookeeper.util.scram.ScramSaslServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -43,16 +44,24 @@ public class ZooKeeperSaslServer {
     }
 
     /**
-     * Picks the SASL mechanism from the first client packet: a DIGEST-MD5 client
-     * starts with an empty token, a GSSAPI client with a non-empty one. A server
-     * without a Kerberos principal keeps the historical behavior and always
-     * negotiates DIGEST-MD5. No wire protocol change is involved.
+     * Picks the SASL mechanism from the first client packet: a DIGEST-MD5
+     * client starts with an empty token, a SCRAM client with a GS2 header
+     * ('n'/'y'/'p'), a GSSAPI client with an ASN.1 token (0x60). A server
+     * without a Kerberos principal keeps the historical behavior and
+     * negotiates DIGEST-MD5 or SCRAM. No wire protocol change is involved.
      */
     private SaslServer createSaslServer(byte[] firstToken) {
         synchronized (login) {
             Subject subject = login.getSubject();
             boolean hasKerberosPrincipal = subject != null && !subject.getPrincipals().isEmpty();
             callbackHandler = login.newCallbackHandler();
+            if (isScramFirstToken(firstToken)) {
+                if (subject == null) {
+                    return null;
+                }
+                LOG.info("serving SCRAM-SHA-256 to a client that started with a GS2 header");
+                return new ScramSaslServer(callbackHandler);
+            }
             if (hasKerberosPrincipal && firstToken.length > 0) {
                 return SecurityUtils.createGssSaslServer(subject, callbackHandler, LOG);
             }
@@ -61,6 +70,16 @@ public class ZooKeeperSaslServer {
             }
             return SecurityUtils.createDigestSaslServer("zookeeper", "zk-sasl-md5", callbackHandler, LOG);
         }
+    }
+
+    /**
+     * A SCRAM client-first message starts with the GS2 cbind flag; a GSSAPI
+     * initial token always starts with the ASN.1 APPLICATION 0 tag (0x60), so
+     * the two cannot collide.
+     */
+    private static boolean isScramFirstToken(byte[] firstToken) {
+        return firstToken.length > 0
+            && (firstToken[0] == 'n' || firstToken[0] == 'y' || firstToken[0] == 'p');
     }
 
     /**
