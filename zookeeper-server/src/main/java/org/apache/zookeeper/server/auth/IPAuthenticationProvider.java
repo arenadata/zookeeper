@@ -260,6 +260,6 @@ public class IPAuthenticationProvider implements AuthenticationProvider {
         }
         // return the rightmost IP address in the X-Forwarded-For chain
         String[] tokens = xForwardedForHeader.split(",");
-        return tokens[tokens.length - 1];
+        return tokens[tokens.length - 1].trim();
     }
 }
