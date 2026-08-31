@@ -1833,7 +1833,9 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
                         cnxn.addAuthInfo(new Id(DelegationTokenStore.TOKEN_AUTH_SCHEME, authorizationID));
                     }
 
-                    if (isSaslSuperUser(authorizationID)) {
+                    // a delegation token carries the owner's ordinary rights only,
+                    // never the superuser bypass — tokens are distributable
+                    if (!saslServer.isTokenAuthenticated() && isSaslSuperUser(authorizationID)) {
                         cnxn.addAuthInfo(new Id("super", ""));
                         LOG.info(
                             "Session 0x{}: Authenticated Id '{}' as super user",

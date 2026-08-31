@@ -34,6 +34,9 @@ import org.apache.zookeeper.util.scram.ScramMessages.ServerFirstMessage;
  */
 public class ScramSaslClient implements SaslClient {
 
+    private static final int MIN_ITERATIONS = 4096;
+    private static final int MIN_SALT_LENGTH = 8;
+
     private enum State {
         SEND_CLIENT_FIRST,
         RECEIVE_SERVER_FIRST,
@@ -84,6 +87,15 @@ public class ScramSaslClient implements SaslClient {
                 ServerFirstMessage serverFirst = new ServerFirstMessage(challenge);
                 if (!serverFirst.nonce().startsWith(clientNonce)) {
                     throw new SaslException("server nonce does not extend the client nonce");
+                }
+                // RFC 7677 floor: a MITM lowering the count or shrinking the
+                // salt would make the transmitted proof cheap to attack offline
+                if (serverFirst.iterations() < MIN_ITERATIONS) {
+                    throw new SaslException("server iteration count " + serverFirst.iterations()
+                        + " is below the minimum " + MIN_ITERATIONS);
+                }
+                if (serverFirst.salt().length < MIN_SALT_LENGTH) {
+                    throw new SaslException("server salt is shorter than " + MIN_SALT_LENGTH + " bytes");
                 }
                 saltedPassword = ScramFormatter.hi(password, serverFirst.salt(), serverFirst.iterations());
                 byte[] clientKey = ScramFormatter.clientKey(saltedPassword);

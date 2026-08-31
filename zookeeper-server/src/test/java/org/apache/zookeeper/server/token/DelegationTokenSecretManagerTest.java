@@ -128,6 +128,36 @@ public class DelegationTokenSecretManagerTest {
     }
 
     @Test
+    public void testBinarySecretFileReadVerbatim() throws IOException {
+        // openssl rand output: not valid UTF-8, must never be charset-mangled
+        byte[] binaryKey = new byte[32];
+        for (int i = 0; i < binaryKey.length; i++) {
+            binaryKey[i] = (byte) (0xF0 + (i % 16));
+        }
+        Path secretFile = tmpDir.resolve("binary.key");
+        Files.write(secretFile, binaryKey);
+        assertArrayEquals(binaryKey, DelegationTokenSecretManager.readSecretFile(secretFile.toString()));
+
+        // trailing newline after binary content is still trimmed
+        byte[] withNewline = new byte[33];
+        System.arraycopy(binaryKey, 0, withNewline, 0, 32);
+        withNewline[32] = '\n';
+        Files.write(secretFile, withNewline);
+        assertArrayEquals(binaryKey, DelegationTokenSecretManager.readSecretFile(secretFile.toString()));
+    }
+
+    @Test
+    public void testShortBinarySecretFileFails() throws IOException {
+        // 6 invalid-UTF-8 bytes used to pass the length check after U+FFFD
+        // expansion; the raw length must be what is checked
+        byte[] shortKey = {(byte) 0xFF, (byte) 0xFE, (byte) 0xFD, (byte) 0xFC, (byte) 0xFB, (byte) 0xFA};
+        Path secretFile = tmpDir.resolve("short-binary.key");
+        Files.write(secretFile, shortKey);
+        assertThrows(IOException.class,
+            () -> DelegationTokenSecretManager.readSecretFile(secretFile.toString()));
+    }
+
+    @Test
     public void testRotationAllowsMissingSecretFile() throws IOException {
         System.setProperty(DelegationTokenSecretManager.TOKEN_AUTH_ENABLED, "true");
         System.setProperty(DelegationTokenSecretManager.TOKEN_AUTH_KEY_ROTATION_ENABLED, "true");

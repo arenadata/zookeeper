@@ -184,8 +184,11 @@ public class DelegationTokenKeyRotationTest extends SaslAuthDigestTestBase {
         try (ZooKeeper alice = client(null)) {
             newToken = alice.getDelegationToken("", 0);
         }
-        assertEquals(oldKeyId + 1,
-            DelegationTokenIdentifier.fromBytes(newToken.getIdentifier()).getMasterKeyId());
+        // with a 1 ms roll interval the rolled key rarely covers the new
+        // token's lifetime, so issuance may mint yet another key — the old
+        // key must no longer sign either way
+        assertTrue(DelegationTokenIdentifier.fromBytes(newToken.getIdentifier()).getMasterKeyId() > oldKeyId,
+            "new token must be signed by a newer key than the rolled-away one");
 
         assertTokenAuthenticates(oldToken, "alice");
         assertTokenAuthenticates(newToken, "alice");
@@ -203,6 +206,31 @@ public class DelegationTokenKeyRotationTest extends SaslAuthDigestTestBase {
             assertThrows(KeeperException.NoAuthException.class,
                 () -> alice.getChildren(DelegationTokenStore.KEY_NODE, false));
         }
+    }
+
+    @Test
+    public void testLateIssuanceGetsKeyCoveringItsLifetime() throws Exception {
+        GetDelegationTokenResponse first;
+        try (ZooKeeper alice = client(null)) {
+            first = alice.getDelegationToken("", 0);
+        }
+        int firstKeyId = DelegationTokenIdentifier.fromBytes(first.getIdentifier()).getMasterKeyId();
+
+        // the bootstrap key expires rollInterval (1 ms) + maxLifetime after
+        // creation; a full-lifetime token requested later would outlive it,
+        // so issuance must mint a fresh covering key instead of reusing it
+        Thread.sleep(3000);
+        GetDelegationTokenResponse late;
+        try (ZooKeeper alice = client(null)) {
+            late = alice.getDelegationToken("", 0);
+        }
+        DelegationTokenIdentifier lateIdent = DelegationTokenIdentifier.fromBytes(late.getIdentifier());
+        assertEquals(firstKeyId + 1, lateIdent.getMasterKeyId(),
+            "token outliving the current key must be signed by a fresh key");
+        assertNotNull(waitForKeyNode(lateIdent.getMasterKeyId(), true));
+
+        assertTokenAuthenticates(first, "alice");
+        assertTokenAuthenticates(late, "alice");
     }
 
     @Test

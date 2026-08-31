@@ -19,12 +19,12 @@
 package org.apache.zookeeper.server.token;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
+import java.util.Arrays;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import javax.security.sasl.SaslException;
@@ -166,14 +166,29 @@ public class DelegationTokenSecretManager {
         return new DelegationTokenSecretManager(key, rotation);
     }
 
+    /**
+     * Reads the key as raw bytes — a binary file (e.g. openssl rand output)
+     * must not be altered by charset round-trips. Only leading and trailing
+     * ASCII whitespace is stripped, so text keys keep their old value.
+     */
     static byte[] readSecretFile(String path) throws IOException {
         byte[] raw = Files.readAllBytes(Paths.get(path));
-        String secret = new String(raw, StandardCharsets.UTF_8).trim();
-        byte[] key = secret.getBytes(StandardCharsets.UTF_8);
-        if (key.length < MIN_KEY_LENGTH) {
+        int start = 0;
+        int end = raw.length;
+        while (start < end && isAsciiWhitespace(raw[start])) {
+            start++;
+        }
+        while (end > start && isAsciiWhitespace(raw[end - 1])) {
+            end--;
+        }
+        if (end - start < MIN_KEY_LENGTH) {
             throw new IOException("token master key in " + path + " is shorter than " + MIN_KEY_LENGTH + " bytes");
         }
-        return key;
+        return Arrays.copyOfRange(raw, start, end);
+    }
+
+    private static boolean isAsciiWhitespace(byte b) {
+        return b == ' ' || b == '\n' || b == '\r' || b == '\t';
     }
 
     /**

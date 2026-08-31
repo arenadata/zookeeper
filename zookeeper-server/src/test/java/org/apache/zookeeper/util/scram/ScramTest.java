@@ -180,12 +180,31 @@ public class ScramTest {
     }
 
     @Test
-    public void testUnknownUserRejected() throws Exception {
+    public void testUnknownUserRejectedOnlyAtProof() throws Exception {
         ScramSaslClient client = new ScramSaslClient("mallory", "pencil".toCharArray());
         ScramSaslServer server =
             new ScramSaslServer(staticUserHandler(Collections.singletonMap("user", "pencil")));
         byte[] clientFirst = client.evaluateChallenge(new byte[0]);
-        assertThrows(SaslException.class, () -> server.evaluateResponse(clientFirst));
+        // an unknown user still receives a full challenge (no enumeration oracle)
+        byte[] serverFirst = server.evaluateResponse(clientFirst);
+        byte[] clientFinal = client.evaluateChallenge(serverFirst);
+        assertThrows(SaslException.class, () -> server.evaluateResponse(clientFinal));
+    }
+
+    @Test
+    public void testClientRejectsDowngradedServerFirst() throws Exception {
+        // MITM lowering the iteration count or shrinking the salt must be refused
+        ScramSaslClient lowIterations = new ScramSaslClient("user", "pencil".toCharArray(), "cnonce");
+        lowIterations.evaluateChallenge(new byte[0]);
+        byte[] downgraded = ("r=cnonceXX,s=" + Base64.getEncoder().encodeToString(new byte[16]) + ",i=1")
+            .getBytes(StandardCharsets.UTF_8);
+        assertThrows(SaslException.class, () -> lowIterations.evaluateChallenge(downgraded));
+
+        ScramSaslClient shortSalt = new ScramSaslClient("user", "pencil".toCharArray(), "cnonce");
+        shortSalt.evaluateChallenge(new byte[0]);
+        byte[] tinySalt = ("r=cnonceXX,s=" + Base64.getEncoder().encodeToString(new byte[1]) + ",i=4096")
+            .getBytes(StandardCharsets.UTF_8);
+        assertThrows(SaslException.class, () -> shortSalt.evaluateChallenge(tinySalt));
     }
 
     @Test

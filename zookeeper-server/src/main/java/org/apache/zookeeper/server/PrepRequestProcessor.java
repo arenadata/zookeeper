@@ -800,9 +800,11 @@ public class PrepRequestProcessor extends ZooKeeperCriticalThread implements Req
 
         int masterKeyId = DelegationTokenSecretManager.STATIC_KEY_ID;
         if (tokenManager.isKeyRotationEnabled()) {
-            TokenKeyInfo currentKey = newestValidKey(tokenKeys(), now);
+            // the signing key must outlive the token: pruning is by key expiry
+            // alone, so a key covering less than maxDate would strand the token
+            TokenKeyInfo currentKey = newestValidKey(tokenKeys(), maxDate);
             if (currentKey == null) {
-                // no usable signing key yet: create the first one in the same txn
+                // no key covers the token's lifetime: create one in the same txn
                 ensureKeysParent(txns, zxid, now);
                 masterKeyId = nextKeyId(tokenKeys());
                 appendKeyCreate(txns, zxid, now, masterKeyId,
@@ -1028,10 +1030,10 @@ public class PrepRequestProcessor extends ZooKeeperCriticalThread implements Req
         return keys;
     }
 
-    private static TokenKeyInfo newestValidKey(List<TokenKeyInfo> keys, long now) {
+    private static TokenKeyInfo newestValidKey(List<TokenKeyInfo> keys, long coverUntil) {
         TokenKeyInfo newest = null;
         for (TokenKeyInfo key : keys) {
-            if (key.expiry > now && (newest == null || key.id > newest.id)) {
+            if (key.expiry > coverUntil && (newest == null || key.id > newest.id)) {
                 newest = key;
             }
         }

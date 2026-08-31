@@ -92,7 +92,8 @@ public class DelegationTokenOpsTest extends SaslAuthDigestTestBase {
                 + "Server {\n"
                 + "    " + LOGIN_MODULE + " required\n"
                 + "    user_alice=\"alicepass\"\n"
-                + "    user_bob=\"bobpass\";\n"
+                + "    user_bob=\"bobpass\"\n"
+                + "    user_charlie=\"charliepass\";\n"
                 + "};\n"
                 + "Client {\n"
                 + "    " + LOGIN_MODULE + " required\n"
@@ -103,6 +104,11 @@ public class DelegationTokenOpsTest extends SaslAuthDigestTestBase {
                 + "    " + LOGIN_MODULE + " required\n"
                 + "    username=\"bob\"\n"
                 + "    password=\"bobpass\";\n"
+                + "};\n"
+                + "ClientCharlie {\n"
+                + "    " + LOGIN_MODULE + " required\n"
+                + "    username=\"charlie\"\n"
+                + "    password=\"charliepass\";\n"
                 + "};\n"
                 + "ClientToken {\n"
                 + "    " + LOGIN_MODULE + " required\n"
@@ -155,6 +161,77 @@ public class DelegationTokenOpsTest extends SaslAuthDigestTestBase {
             // a delegation token must not mint further tokens
             assertThrows(KeeperException.NoAuthException.class,
                 () -> tokenClient.getDelegationToken("bob", 0));
+        }
+    }
+
+    @Test
+    public void testSuperUserOwnerTokenDoesNotGrantSuper() throws Exception {
+        System.setProperty(ZooKeeperServer.SASL_SUPER_USER, "alice");
+        try {
+            GetDelegationTokenResponse token;
+            try (ZooKeeper alice = client(null)) {
+                // control: the direct SASL session does carry the super id
+                assertTrue(alice.whoAmI().stream().anyMatch(
+                    info -> "super".equals(info.getAuthScheme())));
+                token = alice.getDelegationToken("bob", 0);
+            }
+
+            installTokenClientSection(token);
+            try (ZooKeeper tokenClient = client("ClientToken")) {
+                List<ClientInfo> clientInfo = tokenClient.whoAmI();
+                assertTrue(clientInfo.stream().anyMatch(
+                    info -> "sasl".equals(info.getAuthScheme()) && "alice".equals(info.getUser())));
+                assertTrue(clientInfo.stream().noneMatch(
+                    info -> "super".equals(info.getAuthScheme())),
+                    "a distributable token must not carry the superuser bypass");
+            }
+        } finally {
+            System.clearProperty(ZooKeeperServer.SASL_SUPER_USER);
+        }
+    }
+
+    @Test
+    public void testLifetimeGuards() throws Exception {
+        // requested lifetime above the server maximum is clamped to it exactly
+        GetDelegationTokenResponse capped;
+        try (ZooKeeper alice = client(null)) {
+            capped = alice.getDelegationToken("bob", Long.MAX_VALUE / 2);
+        }
+        DelegationTokenIdentifier cappedIdent = DelegationTokenIdentifier.fromBytes(capped.getIdentifier());
+        assertEquals(DelegationTokenSecretManager.DEFAULT_MAX_LIFETIME_MS,
+            cappedIdent.getMaxDate() - cappedIdent.getIssueDate(),
+            "issuance must clamp the requested lifetime to the server maximum");
+
+        // renewal never extends expiry past maxDate, and a token past maxDate
+        // cannot be renewed at all
+        GetDelegationTokenResponse shortToken;
+        try (ZooKeeper alice = client(null)) {
+            shortToken = alice.getDelegationToken("bob", 1500);
+        }
+        DelegationTokenIdentifier shortIdent = DelegationTokenIdentifier.fromBytes(shortToken.getIdentifier());
+        try (ZooKeeper bob = client("ClientBob")) {
+            long renewed = bob.renewDelegationToken(shortToken.getIdentifier());
+            assertEquals(shortIdent.getMaxDate(), renewed,
+                "renewal must cap the new expiry at maxDate");
+
+            Thread.sleep(1700);
+            assertThrows(KeeperException.NoAuthException.class,
+                () -> bob.renewDelegationToken(shortToken.getIdentifier()));
+        }
+    }
+
+    @Test
+    public void testCancelByUnrelatedPrincipalDenied() throws Exception {
+        GetDelegationTokenResponse token;
+        try (ZooKeeper alice = client(null)) {
+            token = alice.getDelegationToken("bob", 0);
+        }
+        try (ZooKeeper charlie = client("ClientCharlie")) {
+            assertThrows(KeeperException.NoAuthException.class,
+                () -> charlie.cancelDelegationToken(token.getIdentifier()));
+        }
+        try (ZooKeeper alice = client(null)) {
+            alice.cancelDelegationToken(token.getIdentifier());
         }
     }
 

@@ -1922,7 +1922,14 @@ instead by setting `zookeeper.sasl.client.mechanism=SCRAM-SHA-256`
 mechanism from the first SASL packet): SCRAM uses only SHA-256 primitives
 and works with FIPS mode on, while DIGEST-MD5 clients are refused in FIPS
 mode. Static JAAS users and delegation tokens authenticate over either
-mechanism. In a rolling upgrade enable `tokenAuth.enabled` only after the
+mechanism. SCRAM here protects the wire (the password is never
+transmitted, the server proves itself to the client); it does not add
+stored-credential protection, because the server derives the credential
+from the JAAS password or token HMAC at authentication time. A session
+authenticated with a delegation token carries the owner's ordinary
+permissions only: the `zookeeper.superUser` bypass is never granted to
+token sessions, even when the token's owner is a configured superuser.
+In a rolling upgrade enable `tokenAuth.enabled` only after the
 whole ensemble runs the new version. A freshly issued token can be briefly
 rejected by a follower that has not yet applied the issuing transaction.
 
@@ -1952,8 +1959,10 @@ rejected by a follower that has not yet applied the issuing transaction.
     `/zookeeper/token/keys` (not readable by clients) and rolls them
     every `keyRollIntervalMs`; each token records the id of the key that
     signed it, and old keys are kept until every token they signed has
-    passed its maximum lifetime, then pruned. New tokens are always
-    signed with the newest key, so a leaked key ages out on its own.
+    passed its maximum lifetime, then pruned. Issuance signs with the
+    newest key whose remaining validity covers the token's maximum
+    lifetime, minting a fresh key inline when none does, so a token can
+    never outlive its signing key and a leaked key ages out on its own.
     Because signing keys live in the data tree, snapshots and
     transaction logs contain them — treat backups as secrets. Must be
     set consistently on every ensemble member.
