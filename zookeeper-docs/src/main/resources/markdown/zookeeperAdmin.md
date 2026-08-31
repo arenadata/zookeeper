@@ -1912,8 +1912,7 @@ token cannot mint further tokens. Renewal requires the session principal to
 match the token's renewer; cancellation is allowed to the owner, the renewer
 and super users. The leader periodically cancels expired tokens. The
 `zookeeper-delegation-token` jar provides the Hadoop `TokenIdentifier` and
-`TokenRenewer` (for the YARN ResourceManager classpath) and a Spark
-delegation token provider (`spark.zookeeper.quorum` enables it at submit).
+`TokenRenewer` for the Hadoop classpath (e.g. the YARN ResourceManager).
 
 Security notes: DIGEST-MD5 is cryptographically weak — expose the token path
 only over TLS (`secureClientPort`). Clients can switch to SCRAM-SHA-256

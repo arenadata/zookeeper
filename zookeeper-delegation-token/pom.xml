@@ -31,17 +31,14 @@
   <packaging>jar</packaging>
   <name>Apache ZooKeeper - Delegation Token Integration</name>
   <description>
-    Hadoop/Spark integration for ZooKeeper delegation tokens: the Hadoop
-    TokenIdentifier and TokenRenewer for the ZOOKEEPER_DELEGATION_TOKEN kind
-    and a Spark HadoopDelegationTokenProvider. Hadoop and Spark dependencies
-    are provided-scope: the jar is dropped onto the classpath of the
-    ResourceManager or the Spark driver.
+    Hadoop integration for ZooKeeper delegation tokens: the Hadoop
+    TokenIdentifier and TokenRenewer for the ZOOKEEPER_DELEGATION_TOKEN kind.
+    The Hadoop dependency is provided-scope: the jar is dropped onto the
+    Hadoop classpath (e.g. the YARN ResourceManager).
   </description>
 
   <properties>
-    <hadoop.version>3.4.3</hadoop.version>
-    <spark.version>3.5.4</spark.version>
-    <scala.binary.version>2.12</scala.binary.version>
+    <hadoop.version>3.4.3.1-4.3.0-1</hadoop.version>
   </properties>
 
   <dependencies>
@@ -67,26 +64,6 @@
         <exclusion>
           <groupId>ch.qos.reload4j</groupId>
           <artifactId>reload4j</artifactId>
-        </exclusion>
-      </exclusions>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.spark</groupId>
-      <artifactId>spark-core_${scala.binary.version}</artifactId>
-      <version>${spark.version}</version>
-      <scope>provided</scope>
-      <exclusions>
-        <exclusion>
-          <groupId>org.apache.zookeeper</groupId>
-          <artifactId>zookeeper</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>org.apache.hadoop</groupId>
-          <artifactId>hadoop-client-api</artifactId>
-        </exclusion>
-        <exclusion>
-          <groupId>org.apache.hadoop</groupId>
-          <artifactId>hadoop-client-runtime</artifactId>
         </exclusion>
       </exclusions>
     </dependency>
