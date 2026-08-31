@@ -50,8 +50,8 @@ public class IPAuthTest {
         Mockito.doReturn(forwardedForHeader).when(mockRequest).getHeader(IPAuthenticationProvider.X_FORWARDED_FOR_HEADER_NAME);
         Mockito.doReturn("192.168.0.5").when(mockRequest).getRemoteAddr();
 
-        // validate it returns the leftmost IP from the X-Forwarded-For header
-        final List<Id> expectedIds = Arrays.asList(new Id(provider.getScheme(), "fc00:0:0:0:0:0:0:4"));
+        // validate it returns the rightmost IP from the X-Forwarded-For header
+        final List<Id> expectedIds = Arrays.asList(new Id(provider.getScheme(), "172.16.0.9"));
         assertEquals(expectedIds, provider.handleAuthentication(mockRequest, null));
     }
 
