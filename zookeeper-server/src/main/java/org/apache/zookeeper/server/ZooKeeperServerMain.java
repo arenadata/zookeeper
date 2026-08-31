@@ -35,6 +35,8 @@ import org.apache.zookeeper.server.auth.ProviderRegistry;
 import org.apache.zookeeper.server.persistence.FileTxnSnapLog;
 import org.apache.zookeeper.server.persistence.FileTxnSnapLog.DatadirException;
 import org.apache.zookeeper.server.quorum.QuorumPeerConfig.ConfigException;
+import org.apache.zookeeper.server.token.DelegationTokenCleanupManager;
+import org.apache.zookeeper.server.token.DelegationTokenSecretManager;
 import org.apache.zookeeper.server.util.JvmPauseMonitor;
 import org.apache.zookeeper.util.ServiceUtils;
 import org.slf4j.Logger;
@@ -54,6 +56,7 @@ public class ZooKeeperServerMain {
     private ServerCnxnFactory cnxnFactory;
     private ServerCnxnFactory secureCnxnFactory;
     private ContainerManager containerManager;
+    private DelegationTokenCleanupManager tokenCleanupManager;
     private MetricsProvider metricsProvider;
     private AdminServer adminServer;
 
@@ -176,6 +179,11 @@ public class ZooKeeperServerMain {
                 Long.getLong("znode.container.maxNeverUsedIntervalMs", 0)
             );
             containerManager.start();
+            if (DelegationTokenSecretManager.isEnabled()) {
+                tokenCleanupManager = new DelegationTokenCleanupManager(
+                    zkServer.getZKDatabase(), zkServer.firstProcessor, zkServer.getDelegationTokenManager());
+                tokenCleanupManager.start();
+            }
             ZKAuditProvider.addZKStartStopAuditLog();
 
             serverStarted();
@@ -214,6 +222,9 @@ public class ZooKeeperServerMain {
      * Shutdown the serving instance
      */
     protected void shutdown() {
+        if (tokenCleanupManager != null) {
+            tokenCleanupManager.stop();
+        }
         if (containerManager != null) {
             containerManager.stop();
         }

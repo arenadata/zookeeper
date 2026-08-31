@@ -86,6 +86,8 @@ import org.apache.zookeeper.server.auth.ServerAuthenticationProvider;
 import org.apache.zookeeper.server.persistence.FileTxnSnapLog;
 import org.apache.zookeeper.server.quorum.QuorumPeerConfig;
 import org.apache.zookeeper.server.quorum.ReadOnlyZooKeeperServer;
+import org.apache.zookeeper.server.token.DelegationTokenSecretManager;
+import org.apache.zookeeper.server.token.DelegationTokenStore;
 import org.apache.zookeeper.server.util.JvmPauseMonitor;
 import org.apache.zookeeper.server.util.OSMXBean;
 import org.apache.zookeeper.server.util.QuotaMetricsUtils;
@@ -225,11 +227,35 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
     private static final int DEFAULT_GLOBAL_OUTSTANDING_LIMIT = 1000;
 
     private boolean localSessionEnabled = false;
+
+    private volatile DelegationTokenSecretManager delegationTokenManager;
+    private volatile boolean delegationTokenManagerInitialized;
+
     protected enum State {
         INITIAL,
         RUNNING,
         SHUTDOWN,
         ERROR
+    }
+
+    /**
+     * Returns the delegation token manager, or null when token authentication
+     * is disabled or misconfigured. Lazily created from system properties.
+     */
+    public DelegationTokenSecretManager getDelegationTokenManager() {
+        if (!delegationTokenManagerInitialized) {
+            synchronized (this) {
+                if (!delegationTokenManagerInitialized) {
+                    try {
+                        delegationTokenManager = DelegationTokenSecretManager.createIfEnabled();
+                    } catch (IOException e) {
+                        LOG.error("Delegation token support is enabled but misconfigured; token operations will fail", e);
+                    }
+                    delegationTokenManagerInitialized = true;
+                }
+            }
+        }
+        return delegationTokenManager;
     }
 
     /**
@@ -1801,8 +1827,15 @@ public class ZooKeeperServer implements SessionExpirer, ServerStats.Provider {
                     LOG.info("Session 0x{}: adding SASL authorization for authorizationID: {}",
                             Long.toHexString(cnxn.getSessionId()), authorizationID);
                     cnxn.addAuthInfo(new Id("sasl", authorizationID));
+                    if (saslServer.isTokenAuthenticated()) {
+                        // marks the session so token opcodes can tell delegation
+                        // token sessions from Kerberos/static DIGEST ones
+                        cnxn.addAuthInfo(new Id(DelegationTokenStore.TOKEN_AUTH_SCHEME, authorizationID));
+                    }
 
-                    if (isSaslSuperUser(authorizationID)) {
+                    // a delegation token carries the owner's ordinary rights only,
+                    // never the superuser bypass — tokens are distributable
+                    if (!saslServer.isTokenAuthenticated() && isSaslSuperUser(authorizationID)) {
                         cnxn.addAuthInfo(new Id("super", ""));
                         LOG.info(
                             "Session 0x{}: Authenticated Id '{}' as super user",

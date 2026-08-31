@@ -19,6 +19,8 @@
 package org.apache.zookeeper.server.auth;
 
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.Base64;
 import java.util.Map;
 import javax.security.auth.callback.Callback;
 import javax.security.auth.callback.CallbackHandler;
@@ -27,6 +29,11 @@ import javax.security.auth.callback.PasswordCallback;
 import javax.security.auth.callback.UnsupportedCallbackException;
 import javax.security.sasl.AuthorizeCallback;
 import javax.security.sasl.RealmCallback;
+import javax.security.sasl.SaslException;
+import org.apache.zookeeper.common.Time;
+import org.apache.zookeeper.server.token.DelegationTokenIdentifier;
+import org.apache.zookeeper.server.token.DelegationTokenSecretManager;
+import org.apache.zookeeper.server.token.DelegationTokenStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -39,9 +46,27 @@ public class SaslServerCallbackHandler implements CallbackHandler {
 
     private String userName;
     private final Map<String, String> credentials;
+    private final DelegationTokenSecretManager tokenManager;
+    private final DelegationTokenStore.EntryReader tokenStore;
+    private final DelegationTokenStore.KeyReader keyStore;
+    private DelegationTokenIdentifier tokenIdentifier;
+    private byte[] tokenIdentifierBytes;
+    // rotated signing key bytes; null means the static file key
+    private byte[] tokenSigningKey;
 
     public SaslServerCallbackHandler(Map<String, String> credentials) {
+        this(credentials, null, null, null);
+    }
+
+    public SaslServerCallbackHandler(
+        Map<String, String> credentials,
+        DelegationTokenSecretManager tokenManager,
+        DelegationTokenStore.EntryReader tokenStore,
+        DelegationTokenStore.KeyReader keyStore) {
         this.credentials = credentials;
+        this.tokenManager = tokenManager;
+        this.tokenStore = tokenStore;
+        this.keyStore = keyStore;
     }
 
     public void handle(Callback[] callbacks) throws UnsupportedCallbackException {
@@ -59,6 +84,32 @@ public class SaslServerCallbackHandler implements CallbackHandler {
     }
 
     private void handleNameCallback(NameCallback nc) {
+        tokenIdentifier = null;
+        tokenIdentifierBytes = null;
+        tokenSigningKey = null;
+        // a delegation token client sends base64(identifier) as the username;
+        // anything that does not strictly parse falls back to the static user map.
+        if (tokenManager != null) {
+            byte[] decoded = tryDecodeToken(nc.getDefaultName());
+            DelegationTokenIdentifier ident = decoded == null ? null : tryParseToken(decoded);
+            if (ident != null) {
+                byte[] signingKey;
+                try {
+                    tokenManager.validate(ident);
+                    validateAgainstStore(ident, decoded);
+                    signingKey = resolveSigningKey(ident);
+                } catch (SaslException e) {
+                    LOG.warn("Rejecting delegation token: {}", e.getMessage());
+                    return;
+                }
+                tokenIdentifier = ident;
+                tokenIdentifierBytes = decoded;
+                tokenSigningKey = signingKey;
+                nc.setName(nc.getDefaultName());
+                userName = nc.getDefaultName();
+                return;
+            }
+        }
         // check to see if this user is in the user password database.
         if (credentials.get(nc.getDefaultName()) == null) {
             LOG.warn("User '{}' not found in list of DIGEST-MD5 authenticateable users.", nc.getDefaultName());
@@ -68,8 +119,93 @@ public class SaslServerCallbackHandler implements CallbackHandler {
         userName = nc.getDefaultName();
     }
 
+    /**
+     * Checks the token against the replicated store: the token must exist
+     * (not cancelled), match the stored identifier and not be past its
+     * current expiry. The HMAC password alone is valid until maxDate, so the
+     * store lookup is what makes cancel and renew-based expiry effective.
+     */
+    private void validateAgainstStore(DelegationTokenIdentifier ident, byte[] identifierBytes) throws SaslException {
+        if (tokenStore == null) {
+            throw new SaslException("delegation token store is not available");
+        }
+        byte[] entry = tokenStore.entry(ident.getSequenceNumber());
+        if (entry == null) {
+            throw new SaslException("delegation token for " + ident.getOwner() + " is unknown or cancelled");
+        }
+        try {
+            if (!Arrays.equals(DelegationTokenStore.entryIdentifier(entry), identifierBytes)) {
+                throw new SaslException("delegation token does not match the stored token");
+            }
+            if (Time.currentWallTime() > DelegationTokenStore.entryExpiry(entry)) {
+                throw new SaslException("delegation token for " + ident.getOwner() + " has expired");
+            }
+        } catch (IOException e) {
+            throw new SaslException("malformed delegation token store entry for " + ident.getOwner());
+        }
+    }
+
+    /**
+     * Resolves the key the identifier was signed with: null for the static
+     * file key, the key bytes from the replicated store for a rotated key.
+     */
+    private byte[] resolveSigningKey(DelegationTokenIdentifier ident) throws SaslException {
+        if (ident.getMasterKeyId() == DelegationTokenSecretManager.STATIC_KEY_ID) {
+            if (!tokenManager.hasStaticKey()) {
+                throw new SaslException("delegation token references the static master key but none is configured");
+            }
+            return null;
+        }
+        if (keyStore == null) {
+            throw new SaslException("delegation token key store is not available");
+        }
+        byte[] entry = keyStore.keyEntry(ident.getMasterKeyId());
+        if (entry == null) {
+            throw new SaslException("delegation token signing key " + ident.getMasterKeyId() + " is unknown");
+        }
+        try {
+            if (Time.currentWallTime() > DelegationTokenStore.keyEntryExpiry(entry)) {
+                throw new SaslException("delegation token signing key " + ident.getMasterKeyId() + " has expired");
+            }
+            return DelegationTokenStore.keyEntryBytes(entry);
+        } catch (IOException e) {
+            throw new SaslException("malformed delegation token key entry " + ident.getMasterKeyId());
+        }
+    }
+
+    /**
+     * Returns whether the last handled authentication was a delegation token.
+     */
+    public boolean isTokenAuthenticated() {
+        return tokenIdentifier != null;
+    }
+
+    private static byte[] tryDecodeToken(String name) {
+        if (name == null || name.isEmpty()) {
+            return null;
+        }
+        try {
+            return Base64.getDecoder().decode(name);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private static DelegationTokenIdentifier tryParseToken(byte[] decoded) {
+        try {
+            return DelegationTokenIdentifier.fromBytes(decoded);
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
     private void handlePasswordCallback(PasswordCallback pc) {
-        if ("super".equals(this.userName) && System.getProperty(SYSPROP_SUPER_PASSWORD) != null) {
+        if (tokenIdentifier != null) {
+            byte[] password = tokenSigningKey == null
+                ? tokenManager.computePassword(tokenIdentifierBytes)
+                : DelegationTokenSecretManager.computePassword(tokenSigningKey, tokenIdentifierBytes);
+            pc.setPassword(Base64.getEncoder().encodeToString(password).toCharArray());
+        } else if ("super".equals(this.userName) && System.getProperty(SYSPROP_SUPER_PASSWORD) != null) {
             // superuser: use Java system property for password, if available.
             pc.setPassword(System.getProperty(SYSPROP_SUPER_PASSWORD).toCharArray());
         } else if (credentials.containsKey(userName)) {
@@ -92,10 +228,13 @@ public class SaslServerCallbackHandler implements CallbackHandler {
                  authenticationID, authorizationID);
         ac.setAuthorized(true);
 
+        // a token client authenticates as base64(identifier); authorize it as the token owner
+        String principal = tokenIdentifier != null ? tokenIdentifier.getOwner() : authenticationID;
+
         // canonicalize authorization id according to system properties:
         // zookeeper.kerberos.removeRealmFromPrincipal(={true,false})
         // zookeeper.kerberos.removeHostFromPrincipal(={true,false})
-        KerberosName kerberosName = new KerberosName(authenticationID);
+        KerberosName kerberosName = new KerberosName(principal);
         try {
             StringBuilder userNameBuilder = new StringBuilder(kerberosName.getShortName());
             if (shouldAppendHost(kerberosName)) {
@@ -108,6 +247,10 @@ public class SaslServerCallbackHandler implements CallbackHandler {
             ac.setAuthorizedID(userNameBuilder.toString());
         } catch (IOException e) {
             LOG.error("Failed to set name based on Kerberos authentication rules.", e);
+            if (tokenIdentifier != null) {
+                // without Kerberos rules the token owner is authorized verbatim
+                ac.setAuthorizedID(principal);
+            }
         }
     }
 

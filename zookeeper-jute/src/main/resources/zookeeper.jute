@@ -127,6 +127,24 @@ module org.apache.zookeeper.proto {
     class SetDataResponse {
         org.apache.zookeeper.data.Stat stat;
     }
+    class GetDelegationTokenRequest {
+        ustring renewer;
+        long maxLifetime;
+    }
+    class GetDelegationTokenResponse {
+        buffer identifier;
+        buffer password;
+        long expiryTime;
+    }
+    class RenewDelegationTokenRequest {
+        buffer identifier;
+    }
+    class RenewDelegationTokenResponse {
+        long expiryTime;
+    }
+    class CancelDelegationTokenRequest {
+        buffer identifier;
+    }
     class GetSASLRequest {
         buffer token;
     }

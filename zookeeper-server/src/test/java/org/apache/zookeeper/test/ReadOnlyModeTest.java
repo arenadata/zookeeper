@@ -107,6 +107,42 @@ public class ReadOnlyModeTest extends ZKTestCase {
     }
 
     /**
+     * Delegation token operations are writes and must be rejected in r-o mode.
+     */
+    @Test
+    @Timeout(value = 90)
+    public void testDelegationTokenOpsRejected() throws Exception {
+        qu.enableLocalSession(true);
+        qu.startQuorum();
+        qu.shutdown(2);
+
+        CountdownWatcher watcher = new CountdownWatcher();
+        ZooKeeper zk = new ZooKeeper(qu.getConnString(), CONNECTION_TIMEOUT, watcher, true);
+        watcher.waitForConnected(CONNECTION_TIMEOUT);
+        assertEquals(States.CONNECTEDREADONLY, zk.getState(), "Should be in r-o mode");
+
+        try {
+            zk.getDelegationToken("", 0);
+            fail("getDelegationToken has succeeded during RO mode");
+        } catch (NotReadOnlyException e) {
+            // ok
+        }
+        try {
+            zk.renewDelegationToken(new byte[]{1});
+            fail("renewDelegationToken has succeeded during RO mode");
+        } catch (NotReadOnlyException e) {
+            // ok
+        }
+        try {
+            zk.cancelDelegationToken(new byte[]{1});
+            fail("cancelDelegationToken has succeeded during RO mode");
+        } catch (NotReadOnlyException e) {
+            // ok
+        }
+        zk.close();
+    }
+
+    /**
      * Basic test of read-only client functionality. Tries to read and write
      * during read-only mode, then regains a quorum and tries to write again.
      */

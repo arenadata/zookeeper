@@ -28,9 +28,12 @@ import javax.security.sasl.SaslClient;
 import javax.security.sasl.SaslException;
 import javax.security.sasl.SaslServer;
 import org.apache.zookeeper.SaslClientCallbackHandler;
+import org.apache.zookeeper.client.ZKClientConfig;
 import org.apache.zookeeper.common.X509Util;
 import org.apache.zookeeper.common.ZKConfig;
 import org.apache.zookeeper.server.auth.KerberosName;
+import org.apache.zookeeper.util.scram.ScramFormatter;
+import org.apache.zookeeper.util.scram.ScramSaslClient;
 import org.ietf.jgss.GSSContext;
 import org.ietf.jgss.GSSCredential;
 import org.ietf.jgss.GSSException;
@@ -66,10 +69,23 @@ public final class SecurityUtils {
         final String entity) throws SaslException {
         SaslClient saslClient;
         // Use subject.getPrincipals().isEmpty() as an indication of which SASL
-        // mechanism to use: if empty, use DIGEST-MD5; otherwise, use GSSAPI.
+        // mechanism to use: if empty, use DIGEST-MD5 or SCRAM; otherwise, use GSSAPI.
         if (subject.getPrincipals().isEmpty()) {
-            // no principals: must not be GSSAPI: use DIGEST-MD5 mechanism
-            // instead.
+            String username = (String) (subject.getPublicCredentials().toArray()[0]);
+            String password = (String) (subject.getPrivateCredentials().toArray()[0]);
+            // the mechanism switch is a ZooKeeper client setting; quorum SASL stays DIGEST-MD5
+            String mechanism = config instanceof ZKClientConfig
+                ? config.getProperty(
+                    ZKClientConfig.ZK_SASL_CLIENT_MECHANISM, ZKClientConfig.ZK_SASL_CLIENT_MECHANISM_DEFAULT)
+                : ZKClientConfig.ZK_SASL_CLIENT_MECHANISM_DEFAULT;
+            if (ScramFormatter.MECHANISM.equals(mechanism)) {
+                // FIPS-compatible: SHA-256 primitives only
+                LOG.info("{} will use SCRAM-SHA-256 as SASL mechanism.", entity);
+                return new ScramSaslClient(username, password.toCharArray());
+            }
+            if (!"DIGEST-MD5".equals(mechanism)) {
+                throw new SaslException("unsupported SASL client mechanism: " + mechanism);
+            }
             // FIPS-mode: don't try DIGEST-MD5, just return error
             if (X509Util.getFipsMode(config)) {
                 LOG.warn("{} will not use DIGEST-MD5 as SASL mechanism, because FIPS mode is enabled.", entity);
@@ -77,8 +93,6 @@ public final class SecurityUtils {
             }
             LOG.info("{} will use DIGEST-MD5 as SASL mechanism.", entity);
             String[] mechs = {"DIGEST-MD5"};
-            String username = (String) (subject.getPublicCredentials().toArray()[0]);
-            String password = (String) (subject.getPrivateCredentials().toArray()[0]);
             // 'domain' parameter is hard-wired between the server and client
             saslClient = Sasl.createSaslClient(mechs, username, protocol, serverName, null, new SaslClientCallbackHandler(password, entity));
             return saslClient;
@@ -170,94 +184,125 @@ public final class SecurityUtils {
             // server is using a JAAS-authenticated subject: determine service
             // principal name and hostname from zk server's subject.
             if (subject.getPrincipals().size() > 0) {
-                try {
-                    final Object[] principals = subject.getPrincipals().toArray();
-                    final Principal servicePrincipal = (Principal) principals[0];
-
-                    // e.g. servicePrincipalNameAndHostname :=
-                    // "zookeeper/myhost.foo.com@FOO.COM"
-                    final String servicePrincipalNameAndHostname = servicePrincipal.getName();
-
-                    int indexOf = servicePrincipalNameAndHostname.indexOf("/");
-
-                    // e.g. servicePrincipalName := "zookeeper"
-                    final String servicePrincipalName = servicePrincipalNameAndHostname.substring(0, indexOf);
-
-                    // e.g. serviceHostnameAndKerbDomain :=
-                    // "myhost.foo.com@FOO.COM"
-                    final String serviceHostnameAndKerbDomain = servicePrincipalNameAndHostname.substring(indexOf + 1);
-
-                    indexOf = serviceHostnameAndKerbDomain.indexOf("@");
-                    // e.g. serviceHostname := "myhost.foo.com"
-                    final String serviceHostname = serviceHostnameAndKerbDomain.substring(0, indexOf);
-
-                    // TODO: should depend on zoo.cfg specified mechs, but if
-                    // subject is non-null, it can be assumed to be GSSAPI.
-                    final String mech = "GSSAPI";
-
-                    LOG.debug("serviceHostname is '{}'", serviceHostname);
-                    LOG.debug("servicePrincipalName is '{}'", servicePrincipalName);
-                    LOG.debug("SASL mechanism(mech) is '{}'", mech);
-
-                    boolean usingNativeJgss = Boolean.getBoolean("sun.security.jgss.native");
-                    if (usingNativeJgss) {
-                        // http://docs.oracle.com/javase/6/docs/technotes/guides/security/jgss/jgss-features.html
-                        // """
-                        // In addition, when performing operations as a
-                        // particular
-                        // Subject, e.g. Subject.doAs(...) or
-                        // Subject.doAsPrivileged(...), the to-be-used
-                        // GSSCredential should be added to Subject's
-                        // private credential set. Otherwise, the GSS operations
-                        // will fail since no credential is found.
-                        // """
-                        try {
-                            GSSManager manager = GSSManager.getInstance();
-                            Oid krb5Mechanism = new Oid("1.2.840.113554.1.2.2");
-                            GSSName gssName = manager.createName(
-                                servicePrincipalName + "@" + serviceHostname,
-                                GSSName.NT_HOSTBASED_SERVICE);
-                            GSSCredential cred = manager.createCredential(gssName, GSSContext.DEFAULT_LIFETIME, krb5Mechanism, GSSCredential.ACCEPT_ONLY);
-                            subject.getPrivateCredentials().add(cred);
-                            LOG.debug(
-                                "Added private credential to service principal name: '{}', GSSCredential name: {}",
-                                servicePrincipalName,
-                                cred.getName());
-                        } catch (GSSException ex) {
-                            LOG.warn("Cannot add private credential to subject; clients authentication may fail", ex);
-                        }
-                    }
-                    try {
-                        return Subject.doAs(subject, new PrivilegedExceptionAction<SaslServer>() {
-                            public SaslServer run() {
-                                try {
-                                    SaslServer saslServer;
-                                    saslServer = Sasl.createSaslServer(mech, servicePrincipalName, serviceHostname, null, callbackHandler);
-                                    return saslServer;
-                                } catch (SaslException e) {
-                                    LOG.error("Zookeeper Server failed to create a SaslServer to interact with a client during session initiation", e);
-                                    return null;
-                                }
-                            }
-                        });
-                    } catch (PrivilegedActionException e) {
-                        // TODO: exit server at this point(?)
-                        LOG.error("Zookeeper Quorum member experienced a PrivilegedActionException exception while creating a SaslServer using a JAAS principal context", e);
-                    }
-                } catch (IndexOutOfBoundsException e) {
-                    LOG.error("server principal name/hostname determination error", e);
-                }
+                return createGssSaslServer(subject, callbackHandler, LOG);
             } else {
-                // JAAS non-GSSAPI authentication: assuming and supporting only
-                // DIGEST-MD5 mechanism for now.
-                // TODO: use 'authMech=' value in zoo.cfg.
+                return createDigestSaslServer(protocol, serverName, callbackHandler, LOG);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Create a GSSAPI SaslServer for the given Kerberos-authenticated subject.
+     * It will return null if there is an exception.
+     *
+     * @param subject subject holding the service Kerberos principal
+     * @param callbackHandler login callback handler
+     * @param LOG logger
+     * @return sasl server object
+     */
+    public static SaslServer createGssSaslServer(
+        final Subject subject,
+        final CallbackHandler callbackHandler,
+        final Logger LOG) {
+        try {
+            final Object[] principals = subject.getPrincipals().toArray();
+            final Principal servicePrincipal = (Principal) principals[0];
+
+            // e.g. servicePrincipalNameAndHostname :=
+            // "zookeeper/myhost.foo.com@FOO.COM"
+            final String servicePrincipalNameAndHostname = servicePrincipal.getName();
+
+            int indexOf = servicePrincipalNameAndHostname.indexOf("/");
+
+            // e.g. servicePrincipalName := "zookeeper"
+            final String servicePrincipalName = servicePrincipalNameAndHostname.substring(0, indexOf);
+
+            // e.g. serviceHostnameAndKerbDomain :=
+            // "myhost.foo.com@FOO.COM"
+            final String serviceHostnameAndKerbDomain = servicePrincipalNameAndHostname.substring(indexOf + 1);
+
+            indexOf = serviceHostnameAndKerbDomain.indexOf("@");
+            // e.g. serviceHostname := "myhost.foo.com"
+            final String serviceHostname = serviceHostnameAndKerbDomain.substring(0, indexOf);
+
+            // TODO: should depend on zoo.cfg specified mechs, but if
+            // subject is non-null, it can be assumed to be GSSAPI.
+            final String mech = "GSSAPI";
+
+            LOG.debug("serviceHostname is '{}'", serviceHostname);
+            LOG.debug("servicePrincipalName is '{}'", servicePrincipalName);
+            LOG.debug("SASL mechanism(mech) is '{}'", mech);
+
+            boolean usingNativeJgss = Boolean.getBoolean("sun.security.jgss.native");
+            if (usingNativeJgss) {
+                // http://docs.oracle.com/javase/6/docs/technotes/guides/security/jgss/jgss-features.html
+                // """
+                // In addition, when performing operations as a
+                // particular
+                // Subject, e.g. Subject.doAs(...) or
+                // Subject.doAsPrivileged(...), the to-be-used
+                // GSSCredential should be added to Subject's
+                // private credential set. Otherwise, the GSS operations
+                // will fail since no credential is found.
+                // """
                 try {
-                    SaslServer saslServer = Sasl.createSaslServer("DIGEST-MD5", protocol, serverName, null, callbackHandler);
-                    return saslServer;
-                } catch (SaslException e) {
-                    LOG.error("Zookeeper Quorum member failed to create a SaslServer to interact with a client during session initiation", e);
+                    GSSManager manager = GSSManager.getInstance();
+                    Oid krb5Mechanism = new Oid("1.2.840.113554.1.2.2");
+                    GSSName gssName = manager.createName(
+                        servicePrincipalName + "@" + serviceHostname,
+                        GSSName.NT_HOSTBASED_SERVICE);
+                    GSSCredential cred = manager.createCredential(gssName, GSSContext.DEFAULT_LIFETIME, krb5Mechanism, GSSCredential.ACCEPT_ONLY);
+                    subject.getPrivateCredentials().add(cred);
+                    LOG.debug(
+                        "Added private credential to service principal name: '{}', GSSCredential name: {}",
+                        servicePrincipalName,
+                        cred.getName());
+                } catch (GSSException ex) {
+                    LOG.warn("Cannot add private credential to subject; clients authentication may fail", ex);
                 }
             }
+            try {
+                return Subject.doAs(subject, new PrivilegedExceptionAction<SaslServer>() {
+                    public SaslServer run() {
+                        try {
+                            SaslServer saslServer;
+                            saslServer = Sasl.createSaslServer(mech, servicePrincipalName, serviceHostname, null, callbackHandler);
+                            return saslServer;
+                        } catch (SaslException e) {
+                            LOG.error("Zookeeper Server failed to create a SaslServer to interact with a client during session initiation", e);
+                            return null;
+                        }
+                    }
+                });
+            } catch (PrivilegedActionException e) {
+                // TODO: exit server at this point(?)
+                LOG.error("Zookeeper Quorum member experienced a PrivilegedActionException exception while creating a SaslServer using a JAAS principal context", e);
+            }
+        } catch (IndexOutOfBoundsException e) {
+            LOG.error("server principal name/hostname determination error", e);
+        }
+        return null;
+    }
+
+    /**
+     * Create a DIGEST-MD5 SaslServer. It will return null if there is an exception.
+     *
+     * @param protocol protocol
+     * @param serverName server name
+     * @param callbackHandler login callback handler
+     * @param LOG logger
+     * @return sasl server object
+     */
+    public static SaslServer createDigestSaslServer(
+        final String protocol,
+        final String serverName,
+        final CallbackHandler callbackHandler,
+        final Logger LOG) {
+        try {
+            return Sasl.createSaslServer("DIGEST-MD5", protocol, serverName, null, callbackHandler);
+        } catch (SaslException e) {
+            LOG.error("Zookeeper Quorum member failed to create a SaslServer to interact with a client during session initiation", e);
         }
         return null;
     }

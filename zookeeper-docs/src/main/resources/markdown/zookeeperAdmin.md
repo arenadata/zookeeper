@@ -43,6 +43,7 @@ limitations under the License.
         * [Advanced Configuration](#sc_advancedConfiguration)
         * [Cluster Options](#sc_clusterOptions)
         * [Encryption, Authentication, Authorization Options](#sc_authOptions)
+        * [Delegation Token Options](#sc_delegationTokens)
         * [Experimental Options/Features](#Experimental+Options%2FFeatures)
         * [Unsafe Options](#Unsafe+Options)
         * [Disabling data directory autocreation](#Disabling+data+directory+autocreation)
@@ -1886,6 +1887,109 @@ and [SASL authentication for ZooKeeper](https://cwiki.apache.org/confluence/disp
       can be used.
     
     Default: **true** (3.9.0+), **false** (3.8.x)
+
+<a name="sc_delegationTokens"></a>
+
+#### Delegation Token Options
+
+ZooKeeper can issue Hadoop-style delegation tokens, so jobs (YARN containers,
+Spark executors) can authenticate to a SASL-protected ensemble without
+distributing Kerberos keytabs. A token is obtained by an already
+SASL-authenticated client (typically over GSSAPI/Kerberos), travels with the
+job through the standard Hadoop credential distribution and authenticates via
+SASL DIGEST-MD5: the username is the base64 identifier and the password is
+`HMAC-SHA256(masterKey, identifier)`. The password is never stored by the
+ensemble — any member derives it from the master key. Token state (identifier
+and current expiry) lives under the `/zookeeper/token` subtree, replicates as
+ordinary transactions, persists in snapshots and is required at
+authentication time, which is what makes cancellation and expiry effective.
+
+Tokens are issued, renewed and cancelled through dedicated client API calls
+(`ZooKeeper.getDelegationToken`, `renewDelegationToken`,
+`cancelDelegationToken`) or with `zkTokenTool.sh --server <connect-string>`.
+Issuance is denied to sessions that are themselves token-authenticated, so a
+token cannot mint further tokens. Renewal requires the session principal to
+match the token's renewer; cancellation is allowed to the owner, the renewer
+and super users. The leader periodically cancels expired tokens. The
+`zookeeper-delegation-token` jar provides the Hadoop `TokenIdentifier` and
+`TokenRenewer` for the Hadoop classpath (e.g. the YARN ResourceManager).
+
+Security notes: DIGEST-MD5 is cryptographically weak — expose the token path
+only over TLS (`secureClientPort`). Clients can switch to SCRAM-SHA-256
+instead by setting `zookeeper.sasl.client.mechanism=SCRAM-SHA-256`
+(client-side, no server configuration needed — the server picks the
+mechanism from the first SASL packet): SCRAM uses only SHA-256 primitives
+and works with FIPS mode on, while DIGEST-MD5 clients are refused in FIPS
+mode. Static JAAS users and delegation tokens authenticate over either
+mechanism. SCRAM here protects the wire (the password is never
+transmitted, the server proves itself to the client); it does not add
+stored-credential protection, because the server derives the credential
+from the JAAS password or token HMAC at authentication time. A session
+authenticated with a delegation token carries the owner's ordinary
+permissions only: the `zookeeper.superUser` bypass is never granted to
+token sessions, even when the token's owner is a configured superuser.
+In a rolling upgrade enable `tokenAuth.enabled` only after the
+whole ensemble runs the new version. A freshly issued token can be briefly
+rejected by a follower that has not yet applied the issuing transaction.
+
+* *tokenAuth.enabled* :
+    (Java system property: **zookeeper.tokenAuth.enabled**)
+    Enables delegation token authentication and the token operations.
+    Must be set (with the same key configuration) on every ensemble
+    member.
+    Default: **false**
+
+* *tokenAuth.secretFile* :
+    (Java system property: **zookeeper.tokenAuth.secretFile**)
+    Path to the static master key file, required when token support is
+    enabled and key rotation is off; the server refuses to start without
+    a usable key. The file content is trimmed and used as the HMAC key
+    (minimum 16 bytes). It must be identical on all ensemble members and
+    readable only by the ZooKeeper process. Replacing the file is a
+    config change plus a rolling restart; tokens issued under the old
+    key stop authenticating. With key rotation enabled the file is
+    optional and only validates tokens issued before rotation was turned
+    on.
+
+* *tokenAuth.keyRotationEnabled* :
+    (Java system property: **zookeeper.tokenAuth.keyRotationEnabled**)
+    Enables automatic master key rotation. The leader generates random
+    signing keys, replicates them as znodes under
+    `/zookeeper/token/keys` (not readable by clients) and rolls them
+    every `keyRollIntervalMs`; each token records the id of the key that
+    signed it, and old keys are kept until every token they signed has
+    passed its maximum lifetime, then pruned. Issuance signs with the
+    newest key whose remaining validity covers the token's maximum
+    lifetime, minting a fresh key inline when none does, so a token can
+    never outlive its signing key and a leaked key ages out on its own.
+    Because signing keys live in the data tree, snapshots and
+    transaction logs contain them — treat backups as secrets. Must be
+    set consistently on every ensemble member.
+    Default: **false**
+
+* *tokenAuth.keyRollIntervalMs* :
+    (Java system property: **zookeeper.tokenAuth.keyRollIntervalMs**)
+    How often the leader replaces the signing key when key rotation is
+    enabled. Rolls piggyback on the cleanup pass, so the effective
+    period is rounded up to `cleanupIntervalMs`.
+    Default: **86400000** (24 hours)
+
+* *tokenAuth.renewIntervalMs* :
+    (Java system property: **zookeeper.tokenAuth.renewIntervalMs**)
+    Validity extension granted at issuance and on each renewal, capped by
+    the token's maximum lifetime.
+    Default: **86400000** (24 hours)
+
+* *tokenAuth.maxLifetimeMs* :
+    (Java system property: **zookeeper.tokenAuth.maxLifetimeMs**)
+    Maximum total lifetime of an issued token. Clients may request a
+    shorter lifetime; requests for a longer one are capped.
+    Default: **604800000** (7 days)
+
+* *tokenAuth.cleanupIntervalMs* :
+    (Java system property: **zookeeper.tokenAuth.cleanupIntervalMs**)
+    How often the leader scans the token store and cancels expired tokens.
+    Default: **3600000** (1 hour)
 
 <a name="Experimental+Options%2FFeatures"></a>
 

@@ -52,6 +52,7 @@ import org.apache.zookeeper.data.ACL;
 import org.apache.zookeeper.data.ClientInfo;
 import org.apache.zookeeper.data.Stat;
 import org.apache.zookeeper.proto.AddWatchRequest;
+import org.apache.zookeeper.proto.CancelDelegationTokenRequest;
 import org.apache.zookeeper.proto.CheckWatchesRequest;
 import org.apache.zookeeper.proto.Create2Response;
 import org.apache.zookeeper.proto.CreateRequest;
@@ -70,9 +71,13 @@ import org.apache.zookeeper.proto.GetChildrenRequest;
 import org.apache.zookeeper.proto.GetChildrenResponse;
 import org.apache.zookeeper.proto.GetDataRequest;
 import org.apache.zookeeper.proto.GetDataResponse;
+import org.apache.zookeeper.proto.GetDelegationTokenRequest;
+import org.apache.zookeeper.proto.GetDelegationTokenResponse;
 import org.apache.zookeeper.proto.GetEphemeralsRequest;
 import org.apache.zookeeper.proto.GetEphemeralsResponse;
 import org.apache.zookeeper.proto.RemoveWatchesRequest;
+import org.apache.zookeeper.proto.RenewDelegationTokenRequest;
+import org.apache.zookeeper.proto.RenewDelegationTokenResponse;
 import org.apache.zookeeper.proto.ReplyHeader;
 import org.apache.zookeeper.proto.RequestHeader;
 import org.apache.zookeeper.proto.SetACLRequest;
@@ -3113,6 +3118,64 @@ public class ZooKeeper implements AutoCloseable {
         WhoAmIResponse response = new WhoAmIResponse();
         cnxn.submitRequest(h, null, response, null);
         return response.getClientInfo();
+    }
+
+    /**
+     * Requests a delegation token for the principal this session is
+     * authenticated as. The server must have delegation token support enabled
+     * and the session must be SASL-authenticated with a non-token mechanism.
+     *
+     * @param renewer principal allowed to renew the token, may be empty
+     * @param maxLifetimeMs requested token lifetime in milliseconds; 0 for the
+     *        server default, larger values are capped by the server
+     * @return the issued token: identifier bytes, password bytes and current expiry
+     */
+    public GetDelegationTokenResponse getDelegationToken(String renewer, long maxLifetimeMs)
+        throws KeeperException, InterruptedException {
+        RequestHeader h = new RequestHeader();
+        h.setType(ZooDefs.OpCode.getDelegationToken);
+        GetDelegationTokenRequest request = new GetDelegationTokenRequest(renewer == null ? "" : renewer, maxLifetimeMs);
+        GetDelegationTokenResponse response = new GetDelegationTokenResponse();
+        ReplyHeader r = cnxn.submitRequest(h, request, response, null);
+        if (r.getErr() != 0) {
+            throw KeeperException.create(KeeperException.Code.get(r.getErr()));
+        }
+        return response;
+    }
+
+    /**
+     * Renews a delegation token. The session must be authenticated as the
+     * token's renewer.
+     *
+     * @param identifier the token identifier bytes
+     * @return the new expiry time in milliseconds since epoch
+     */
+    public long renewDelegationToken(byte[] identifier) throws KeeperException, InterruptedException {
+        RequestHeader h = new RequestHeader();
+        h.setType(ZooDefs.OpCode.renewDelegationToken);
+        RenewDelegationTokenRequest request = new RenewDelegationTokenRequest(identifier);
+        RenewDelegationTokenResponse response = new RenewDelegationTokenResponse();
+        ReplyHeader r = cnxn.submitRequest(h, request, response, null);
+        if (r.getErr() != 0) {
+            throw KeeperException.create(KeeperException.Code.get(r.getErr()));
+        }
+        return response.getExpiryTime();
+    }
+
+    /**
+     * Cancels a delegation token. The session must be authenticated as the
+     * token's owner or renewer.
+     *
+     * @param identifier the token identifier bytes
+     */
+    public void cancelDelegationToken(byte[] identifier) throws KeeperException, InterruptedException {
+        RequestHeader h = new RequestHeader();
+        h.setType(ZooDefs.OpCode.cancelDelegationToken);
+        CancelDelegationTokenRequest request = new CancelDelegationTokenRequest(identifier);
+        ReplyHeader r = cnxn.submitRequest(h, request, null, null);
+        if (r.getErr() != 0) {
+            throw KeeperException.create(KeeperException.Code.get(r.getErr()));
+        }
     }
 
 }

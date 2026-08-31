@@ -35,6 +35,8 @@ import org.apache.zookeeper.server.ServerCnxn;
 import org.apache.zookeeper.server.ServerMetrics;
 import org.apache.zookeeper.server.ZKDatabase;
 import org.apache.zookeeper.server.persistence.FileTxnSnapLog;
+import org.apache.zookeeper.server.token.DelegationTokenCleanupManager;
+import org.apache.zookeeper.server.token.DelegationTokenSecretManager;
 
 /**
  *
@@ -46,6 +48,8 @@ import org.apache.zookeeper.server.persistence.FileTxnSnapLog;
 public class LeaderZooKeeperServer extends QuorumZooKeeperServer {
 
     private ContainerManager containerManager;  // guarded by sync
+
+    private DelegationTokenCleanupManager tokenCleanupManager;  // guarded by sync
 
     CommitProcessor commitProcessor;
 
@@ -75,6 +79,7 @@ public class LeaderZooKeeperServer extends QuorumZooKeeperServer {
         firstProcessor = new LeaderRequestProcessor(this, prepRequestProcessor);
 
         setupContainerManager();
+        setupTokenCleanupManager();
     }
 
     private synchronized void setupContainerManager() {
@@ -87,11 +92,21 @@ public class LeaderZooKeeperServer extends QuorumZooKeeperServer {
         );
     }
 
+    private synchronized void setupTokenCleanupManager() {
+        if (DelegationTokenSecretManager.isEnabled()) {
+            tokenCleanupManager = new DelegationTokenCleanupManager(
+                getZKDatabase(), prepRequestProcessor, getDelegationTokenManager());
+        }
+    }
+
     @Override
     public synchronized void startup() {
         super.startup();
         if (containerManager != null) {
             containerManager.start();
+        }
+        if (tokenCleanupManager != null) {
+            tokenCleanupManager.start();
         }
     }
 
@@ -158,6 +173,9 @@ public class LeaderZooKeeperServer extends QuorumZooKeeperServer {
     protected synchronized void shutdownComponents() {
         if (containerManager != null) {
             containerManager.stop();
+        }
+        if (tokenCleanupManager != null) {
+            tokenCleanupManager.stop();
         }
         super.shutdownComponents();
     }
