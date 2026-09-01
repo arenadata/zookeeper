@@ -57,7 +57,7 @@ public class IPAuthenticationProviderTest {
     // Arrange
     System.setProperty(USE_X_FORWARDED_FOR_KEY, "false");
     doReturn("192.168.1.1").when(request).getRemoteAddr();
-    doReturn("192.168.1.2,192.168.1.3,192.168.1.4").when(request).getHeader(X_FORWARDED_FOR_HEADER_NAME);
+    doReturn("192.168.1.2, 192.168.1.3, 192.168.1.4").when(request).getHeader(X_FORWARDED_FOR_HEADER_NAME);
 
     // Act
     String clientIp = IPAuthenticationProvider.getClientIPAddress(request);
@@ -71,7 +71,7 @@ public class IPAuthenticationProviderTest {
     // Arrange
     System.clearProperty(USE_X_FORWARDED_FOR_KEY);
     doReturn("192.168.1.1").when(request).getRemoteAddr();
-    doReturn("192.168.1.2,192.168.1.3,192.168.1.4").when(request).getHeader(X_FORWARDED_FOR_HEADER_NAME);
+    doReturn("192.168.1.2, 192.168.1.3, 192.168.1.4").when(request).getHeader(X_FORWARDED_FOR_HEADER_NAME);
 
     // Act
     String clientIp = IPAuthenticationProvider.getClientIPAddress(request);
@@ -85,13 +85,13 @@ public class IPAuthenticationProviderTest {
     // Arrange
     System.setProperty(USE_X_FORWARDED_FOR_KEY, "true");
     doReturn("192.168.1.1").when(request).getRemoteAddr();
-    doReturn("192.168.1.2,192.168.1.3,192.168.1.4").when(request).getHeader(X_FORWARDED_FOR_HEADER_NAME);
+    doReturn("192.168.1.2, 192.168.1.3, 192.168.1.4").when(request).getHeader(X_FORWARDED_FOR_HEADER_NAME);
 
     // Act
     String clientIp = IPAuthenticationProvider.getClientIPAddress(request);
 
     // Assert
-    assertEquals("192.168.1.2", clientIp);
+    assertEquals("192.168.1.4", clientIp);
   }
 
   @Test

@@ -43,6 +43,7 @@ limitations under the License.
         * [Advanced Configuration](#sc_advancedConfiguration)
         * [Cluster Options](#sc_clusterOptions)
         * [Encryption, Authentication, Authorization Options](#sc_authOptions)
+            * [TLS Cipher Suites](#sc_tls_cipher_suites)
         * [Delegation Token Options](#sc_delegationTokens)
         * [Experimental Options/Features](#Experimental+Options%2FFeatures)
         * [Unsafe Options](#Unsafe+Options)
@@ -1577,14 +1578,43 @@ and [SASL authentication for ZooKeeper](https://cwiki.apache.org/confluence/disp
 
 * *IPAuthenticationProvider.usexforwardedfor* :
     (Java system property: **zookeeper.IPAuthenticationProvider.usexforwardedfor**)
+
     **New in 3.9.3:**
-    IPAuthenticationProvider uses the client IP address to authenticate the user. By 
-    default it reads the **Host** HTTP header to detect client IP address. In some 
-    proxy configurations the proxy server adds the **X-Forwarded-For** header to
-    the request in order to provide the IP address of the original client request. 
-    By enabling **usexforwardedfor** ZooKeeper setting, **X-Forwarded-For** will be preferred
-    over the standard **Host** header.
-    Default value is **false**.
+
+    `IPAuthenticationProvider` authenticates clients based on their IP address. By 
+    default, ZooKeeper determines the client IP using the standard `Host` HTTP header. 
+    In certain reverse proxy or load balancer deployments, proxies may include the 
+    `X-Forwarded-For` header to indicate the originating client’s IP address.
+    When `usexforwardedfor` is enabled, ZooKeeper will prefer the `X-Forwarded-For` 
+    header over the `Host` header when determining the client IP address for authentication 
+    purposes. 
+
+    Default value is **false**
+
+    <br/>**Security Warning**
+
+    Enabling `usexforwardedfor` introduces significant security risks unless ZooKeeper 
+    is deployed strictly behind trusted, controlled proxy infrastructure:
+
+    - ZooKeeper does **not** validate the `X-Forwarded-For` header against the actual TCP 
+    source IP address.
+    - ZooKeeper does **not** enforce a trusted proxy allowlist or verify that the request 
+    originated from an approved intermediary.
+    - Any client capable of connecting to ZooKeeper can forge an arbitrary `X-Forwarded-For` 
+    header value.
+    - A malicious client may impersonate any IP address, potentially bypassing IP-based 
+    authentication and ZooKeeper ACL restrictions entirely.
+
+    **Recommendation**
+
+    Enable this setting **only** when:
+
+    - ZooKeeper is accessible exclusively through trusted reverse proxies or load balancers
+    - Direct client access is blocked at the network layer
+    - Proxy infrastructure sanitizes and overwrites incoming `X-Forwarded-For` headers
+
+    For most deployments, leaving this property disabled is strongly recommended to preserve 
+    the integrity of IP-based access controls.
 
 * *X509AuthenticationProvider.superUser* :
     (Java system property: **zookeeper.X509AuthenticationProvider.superUser**)
@@ -1735,7 +1765,7 @@ and [SASL authentication for ZooKeeper](https://cwiki.apache.org/confluence/disp
     (Java system properties: **zookeeper.ssl.ciphersuites** and **zookeeper.ssl.quorum.ciphersuites**)
     **New in 3.5.5:**
     Specifies the enabled cipher suites to be used in client and quorum TLS negotiation.
-    Default: Enabled cipher suites depend on the Java runtime version being used.
+    Default: JDK defaults since 3.9.5.2-4.4.0-0, and hard coded cipher suites for 3.9 and earlier versions. See [TLS Cipher Suites](#sc_tls_cipher_suites).
 
 * *ssl.context.supplier.class* and *ssl.quorum.context.supplier.class* :
     (Java system properties: **zookeeper.ssl.context.supplier.class** and **zookeeper.ssl.quorum.context.supplier.class**)
@@ -1887,6 +1917,19 @@ and [SASL authentication for ZooKeeper](https://cwiki.apache.org/confluence/disp
       can be used.
     
     Default: **true** (3.9.0+), **false** (3.8.x)
+
+<a name="sc_tls_cipher_suites"></a>
+
+##### TLS Cipher Suites
+
+From 3.5.5 to 3.9 a hard coded default cipher list was used, with the ordering
+dependent on whether it is run Java 8 or a later version.
+
+The list on Java 8 includes TLSv1.2 CBC, GCM and TLSv1.3 ciphers in ordering: *TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256, TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256, TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA, TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA, TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384, TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384, TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA, TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA, TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256, TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384, TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384, TLS_AES_256_GCM_SHA384,TLS_AES_128_GCM_SHA256, TLS_CHACHA20_POLY1305_SHA256*
+
+The list on Java 9+ includes TLSv1.2 GCM, CBC and TLSv1.3 ciphers in ordering: *TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256, TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384, TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384, TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256, TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256, TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA, TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA, TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384, TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384, TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA, TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA, TLS_AES_256_GCM_SHA384,TLS_AES_128_GCM_SHA256, TLS_CHACHA20_POLY1305_SHA256*
+
+Since 3.9.5.2-4.4.0-0 there is no hardcoded list, and the JDK defaults are used.
 
 <a name="sc_delegationTokens"></a>
 
@@ -2270,6 +2313,18 @@ Both subsystems need to have sufficient amount of threads to achieve peak read t
 <a name="sc_adminserver_config"></a>
 
 #### AdminServer configuration
+
+**New in 3.9.5.2-4.4.0-0:** [AdminServer](#sc_adminserver) will use the following existing properties:
+
+* *ssl.quorum.ciphersuites* :
+  (Java system property: **zookeeper.ssl.quorum.ciphersuites**)
+  The enabled cipher suites to be used in TLS negotiation for AdminServer.
+  Default: Jetty default.
+
+* *ssl.quorum.enabledProtocols* :
+  (Java system property: **zookeeper.ssl.quorum.enabledProtocols**)
+  The enabled protocols to be used in TLS negotiation for AdminServer.
+  Default: Jetty default.
 
 **New in 3.9.0:** The following
 options are used to configure the [AdminServer](#sc_adminserver).
@@ -2797,7 +2852,7 @@ command:
 
 <a name="sc_adminserver"></a>
 
-#### The AdminServer
+### The AdminServer
 
 **New in 3.5.0:** The AdminServer is
 an embedded Jetty server that provides an HTTP interface to the four-letter
@@ -2822,7 +2877,106 @@ The AdminServer is enabled by default, but can be disabled by either:
 Note that the TCP four-letter word interface is still available if
 the AdminServer is disabled.
 
-##### Configuring AdminServer for SSL/TLS
+#### Security Considerations
+
+> **Important:** The AdminServer is enabled by default and listens on all network interfaces (`0.0.0.0`) on port `8080`
+> unless explicitly configured otherwise. By default, communication is **unencrypted (HTTP)** and **client authentication
+> is disabled**. Most administrative commands can be executed by any client that can connect to the AdminServer.
+
+#### Default Security Posture
+
+The default AdminServer configuration is intended for ease of use in trusted environments, but it is **not secure for
+exposure to untrusted networks**.
+
+Default settings include:
+
+* `admin.enableServer=true`
+* `admin.serverAddress=0.0.0.0`
+* `admin.serverPort=8080`
+* `admin.forceHttps=false`
+* `admin.needClientAuth=false`
+
+With these defaults:
+
+* All traffic is transmitted in clear text over HTTP.
+* Administrative data, including configuration and runtime details, can be viewed by anyone with network access.
+* Many commands (such as `stat`, `srvr`, `conf`, and `cons`) do not require authentication.
+* Sensitive operational information may be disclosed.
+* In some environments, unrestricted administrative access can increase the impact of vulnerabilities or misconfiguration.
+
+#### Recommended Deployment Practices
+
+Administrators should ensure that the AdminServer is accessible only to authorized users.
+
+##### Option 1: Restrict Access with Firewall Rules (Minimum Recommendation)
+
+Limit access to the AdminServer port to trusted hosts or management networks only.
+
+Examples:
+
+* Bind the server to localhost:
+
+  ```properties
+  admin.serverAddress=127.0.0.1
+  ```
+* Use host-based firewall rules (such as `iptables`, `firewalld`, or cloud security groups) to allow access only from
+* administrative systems.
+
+This is the minimum recommended protection when HTTPS and client authentication are not enabled.
+
+##### Option 2: Enable HTTPS
+
+To encrypt all communication, configure SSL/TLS and force HTTPS:
+
+```properties
+admin.forceHttps=true
+```
+
+This prevents credentials and administrative data from being transmitted in clear text. ZooKeeper supports configuring
+the AdminServer with TLS certificates and trust stores.
+
+##### Option 3: Require Client Authentication
+
+To restrict access to trusted clients using X.509 certificates:
+
+```properties
+admin.needClientAuth=true
+```
+
+When enabled, only clients presenting valid certificates trusted by the server will be allowed to connect.
+
+#### Recommended Secure Configuration
+
+For production environments, the following configuration is strongly recommended:
+
+```properties
+admin.forceHttps=true
+admin.needClientAuth=true
+admin.serverAddress=<management-network-ip>
+```
+
+In addition, restrict access to the AdminServer port using firewall rules.
+
+#### Disable the AdminServer If Not Needed
+
+If you do not use the AdminServer, disable it entirely:
+
+```properties
+admin.enableServer=false
+```
+
+#### Security Warning
+
+Exposing the AdminServer to untrusted networks with the default configuration may allow unauthorized users to:
+
+* Retrieve server configuration and runtime information
+* Inspect connected clients and sessions
+* Reset statistics
+* Execute other administrative commands
+
+Always protect the AdminServer with **network-level controls** and, preferably, **HTTPS with client certificate authentication**.
+
+#### Configuring AdminServer for SSL/TLS
 - Generating the **keystore.jks** and **truststore.jks** which can be found in the [Quorum TLS](http://zookeeper.apache.org/doc/current/zookeeperAdmin.html#Quorum+TLS).
 - Add the following configuration settings to the `zoo.cfg` config file:
 
@@ -2840,6 +2994,27 @@ ssl.quorum.trustStore.password=password
 2019-08-03 15:44:55,213 [myid:] - INFO  [main:JettyAdminServer@124] - Successfully loaded certificate authority from /data/software/cert/truststore.jks
 
 2019-08-03 15:44:55,403 [myid:] - INFO  [main:JettyAdminServer@170] - Started AdminServer on address 0.0.0.0, port 8080 and command URL /commands
+```
+
+#### Restrict TLS protocols and cipher suites for SSL/TLS negotiation in AdminServer
+
+From 3.9.5.2-4.4.0-0 AdminServer uses the following already existing properties:
+
+* **ssl.quorum.enabledProtocols** to specify the enabled protocols,
+* **ssl.quorum.ciphersuites** to specify the enabled cipher suites.
+
+Add the following configuration settings to the `zoo.cfg` config file:
+
+```
+ssl.quorum.enabledProtocols=TLSv1.2,TLSv1.3
+ssl.quorum.ciphersuites=TLS_AES_128_GCM_SHA256,TLS_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+```
+
+To verify raise the log level of JettyAdminServer to DEBUG and check that the following entries can be seen in the logs:
+
+```
+2026-03-11 11:38:01,102 [myid:] - DEBUG  [main:o.a.z.s.a.JettyAdminServer@159] - Setting enabled protocols: 'TLSv1.2,TLSv1.3'
+2026-03-11 11:38:01,102 [myid:] - DEBUG  [main:o.a.z.s.a.JettyAdminServer@166] - Setting enabled cipherSuites: 'TLS_AES_128_GCM_SHA256,TLS_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384'
 ```
 
 Available commands include:

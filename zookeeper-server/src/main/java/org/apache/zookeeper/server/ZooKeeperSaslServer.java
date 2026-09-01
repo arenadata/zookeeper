@@ -23,6 +23,7 @@ import javax.security.auth.callback.CallbackHandler;
 import javax.security.sasl.SaslException;
 import javax.security.sasl.SaslServer;
 import org.apache.zookeeper.Login;
+import org.apache.zookeeper.common.ZKConfig;
 import org.apache.zookeeper.server.auth.SaslServerCallbackHandler;
 import org.apache.zookeeper.util.SecurityUtils;
 import org.apache.zookeeper.util.scram.ScramSaslServer;
@@ -36,6 +37,7 @@ public class ZooKeeperSaslServer {
 
     private static final Logger LOG = LoggerFactory.getLogger(ZooKeeperSaslServer.class);
     private final Login login;
+    private final ZKConfig config = new ZKConfig();
     private SaslServer saslServer;
     private CallbackHandler callbackHandler;
 
@@ -68,7 +70,7 @@ public class ZooKeeperSaslServer {
             if (subject == null) {
                 return null;
             }
-            return SecurityUtils.createDigestSaslServer("zookeeper", "zk-sasl-md5", callbackHandler, LOG);
+            return SecurityUtils.createDigestSaslServer(config, "zookeeper", "zk-sasl-md5", callbackHandler, LOG);
         }
     }
 
@@ -95,7 +97,7 @@ public class ZooKeeperSaslServer {
         if (saslServer == null) {
             saslServer = createSaslServer(response);
             if (saslServer == null) {
-                throw new SaslException("failed to create a SaslServer for the client response");
+                throw new SaslException("failed to create a SaslServer for the client response (FIPS mode may have blocked DIGEST-MD5)");
             }
         }
         return saslServer.evaluateResponse(response);

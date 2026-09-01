@@ -35,21 +35,17 @@ import java.security.cert.CertPathValidator;
 import java.security.cert.PKIXBuilderParameters;
 import java.security.cert.PKIXRevocationChecker;
 import java.security.cert.X509CertSelector;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
-import java.util.stream.Collectors;
 import javax.net.ssl.CertPathTrustManagerParameters;
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLServerSocket;
-import javax.net.ssl.SSLServerSocketFactory;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
@@ -66,11 +62,6 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Utility code for X509 handling
- *
- * Default cipher suites:
- *
- *   Performance testing done by Facebook engineers shows that on Intel x86_64 machines, Java9 performs better with
- *   GCM and Java8 performs better with CBC, so these seem like reasonable defaults.
  */
 public abstract class X509Util implements Closeable, AutoCloseable {
 
@@ -95,56 +86,41 @@ public abstract class X509Util implements Closeable, AutoCloseable {
         }
     }
 
-    public static final String DEFAULT_PROTOCOL = defaultTlsProtocol();
+    private static final AtomicReference<String> defaultProtocol = new AtomicReference<>();
 
     /**
-     * Return TLSv1.3 or TLSv1.2 depending on Java runtime version being used.
+     * Return TLSv1.2 when FIPS mode is enabled.
+     * Otherwise, returns TLSv1.3 or TLSv1.2 depending on Java runtime version being used.
      * TLSv1.3 was first introduced in JDK11 and back-ported to OpenJDK 8u272.
      */
-    private static String defaultTlsProtocol() {
-        String defaultProtocol = TLS_1_2;
-        List<String> supported = new ArrayList<>();
+    public static String defaultTlsProtocol(ZKConfig config) {
+        if (getFipsMode(config)) {
+            return TLS_1_2;
+        }
+
+        String proto = defaultProtocol.get();
+        if (proto != null) {
+            return proto;
+        }
+
+        proto = TLS_1_2;
         try {
-            supported = Arrays.asList(SSLContext.getDefault().getSupportedSSLParameters().getProtocols());
+            List<String> supported = Arrays.asList(SSLContext.getDefault().getSupportedSSLParameters().getProtocols());
+            // We cannot use the default protocols directly, because the SSLContext factory methods
+            // only accept a single protocol
             if (supported.contains(TLS_1_3)) {
-                defaultProtocol = TLS_1_3;
+                proto = TLS_1_3;
+            }
+            if (defaultProtocol.compareAndSet(null, proto)) {
+                LOG.info("Supported TLS protocols are {}, default TLS protocol is {}", supported, proto);
+            } else {
+                proto = defaultProtocol.get();
             }
         } catch (NoSuchAlgorithmException e) {
             // Ignore.
         }
-        LOG.info("Default TLS protocol is {}, supported TLS protocols are {}", defaultProtocol, supported);
-        return defaultProtocol;
+        return proto;
     }
-
-    // ChaCha20 was introduced in OpenJDK 11.0.15 and it is not supported by JDK8.
-    private static String[] getTLSv13Ciphers() {
-        return new String[]{"TLS_AES_256_GCM_SHA384", "TLS_AES_128_GCM_SHA256", "TLS_CHACHA20_POLY1305_SHA256"};
-    }
-
-    private static String[] getGCMCiphers() {
-        return new String[]{"TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256", "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384", "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"};
-    }
-
-    private static String[] getCBCCiphers() {
-        return new String[]{"TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256", "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256", "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA", "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA", "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384", "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384", "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA", "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA"};
-    }
-
-    /**
-     * Returns a filtered set of ciphers, where ciphers not supported by the JDK are removed.
-     */
-    private static String[] getSupportedCiphers(String[]... cipherLists) {
-        List<String> supported = Arrays.asList(
-            ((SSLServerSocketFactory) SSLServerSocketFactory.getDefault()).getSupportedCipherSuites());
-
-        return Arrays.stream(cipherLists).flatMap(Arrays::stream).filter(supported::contains).collect(Collectors.toList()).toArray(new String[0]);
-    }
-
-    // On Java 8, prefer CBC ciphers since AES-NI support is lacking and GCM is slower than CBC.
-    private static final String[] DEFAULT_CIPHERS_JAVA8 = getSupportedCiphers(getCBCCiphers(), getGCMCiphers(), getTLSv13Ciphers());
-    // On Java 9 and later, prefer GCM ciphers due to improved AES-NI support.
-    // Note that this performance assumption might not hold true for architectures other than x86_64.
-    // TLSv1.3 ciphers can be added at the end of the list without impacting the priority of TLSv1.3 vs TLSv1.2.
-    private static final String[] DEFAULT_CIPHERS_JAVA9 = getSupportedCiphers(getGCMCiphers(), getCBCCiphers(), getTLSv13Ciphers());
 
     public static final int DEFAULT_HANDSHAKE_DETECTION_TIMEOUT_MILLIS = 5000;
 
@@ -388,30 +364,47 @@ public abstract class X509Util implements Closeable, AutoCloseable {
         }
     }
 
-    @SuppressWarnings("unchecked")
     public SSLContextAndOptions createSSLContextAndOptions(ZKConfig config) throws SSLContextException {
-        final String supplierContextClassName = config.getProperty(sslContextSupplierClassProperty);
-        if (supplierContextClassName != null) {
-            LOG.debug("Loading SSLContext supplier from property '{}'", sslContextSupplierClassProperty);
+        final SSLContext suppliedSSLContext = loadSuppliedSSLContext(config);
+        if (suppliedSSLContext != null) {
+            return new SSLContextAndOptions(this, config, suppliedSSLContext);
+        }
+        return createSSLContextAndOptionsFromConfig(config);
+    }
 
-            try {
-                Class<?> sslContextClass = Class.forName(supplierContextClassName);
-                Supplier<SSLContext> sslContextSupplier = (Supplier<SSLContext>) sslContextClass.getConstructor().newInstance();
-                return new SSLContextAndOptions(this, config, sslContextSupplier.get());
-            } catch (ClassNotFoundException
-                | ClassCastException
-                | NoSuchMethodException
-                | InvocationTargetException
-                | InstantiationException
-                | IllegalAccessException e) {
-                throw new SSLContextException("Could not retrieve the SSLContext from supplier source '"
-                                              + supplierContextClassName
-                                              + "' provided in the property '"
-                                              + sslContextSupplierClassProperty
-                                              + "'", e);
-            }
-        } else {
-            return createSSLContextAndOptionsFromConfig(config);
+    /**
+     * Loads an {@link SSLContext} from the {@link Supplier} implementation named by the
+     * {@link #getSslContextSupplierClassProperty()} property. This allows a user to take full control over
+     * the construction of the SSLContext, for example to use a hardware key store or an SSLContext obtained
+     * from a container, rather than having ZooKeeper load key material from files.
+     *
+     * @param config the configuration to read the supplier class name from.
+     * @return the supplied SSLContext, or {@code null} if the property is not set.
+     * @throws SSLContextException if the supplier class cannot be loaded, instantiated or invoked.
+     */
+    @SuppressWarnings("unchecked")
+    protected SSLContext loadSuppliedSSLContext(ZKConfig config) throws SSLContextException {
+        final String supplierContextClassName = config.getProperty(sslContextSupplierClassProperty);
+        if (supplierContextClassName == null) {
+            return null;
+        }
+        LOG.debug("Loading SSLContext supplier from property '{}'", sslContextSupplierClassProperty);
+
+        try {
+            Class<?> sslContextClass = Class.forName(supplierContextClassName);
+            Supplier<SSLContext> sslContextSupplier = (Supplier<SSLContext>) sslContextClass.getConstructor().newInstance();
+            return sslContextSupplier.get();
+        } catch (ClassNotFoundException
+            | ClassCastException
+            | NoSuchMethodException
+            | InvocationTargetException
+            | InstantiationException
+            | IllegalAccessException e) {
+            throw new SSLContextException("Could not retrieve the SSLContext from supplier source '"
+                                          + supplierContextClassName
+                                          + "' provided in the property '"
+                                          + sslContextSupplierClassProperty
+                                          + "'", e);
         }
     }
 
@@ -467,8 +460,8 @@ public abstract class X509Util implements Closeable, AutoCloseable {
                                               + trustStoreTypeProp, e);
             }
         }
-
-        String protocol = config.getProperty(sslProtocolProperty, DEFAULT_PROTOCOL);
+        String defaultTlsProtocol = defaultTlsProtocol(config);
+        String protocol = config.getProperty(sslProtocolProperty, defaultTlsProtocol);
         try {
             SSLContext sslContext = SSLContext.getInstance(protocol);
             sslContext.init(keyManagers, trustManagers, null);
@@ -675,26 +668,6 @@ public abstract class X509Util implements Closeable, AutoCloseable {
 
     public SSLServerSocket createSSLServerSocket(int port) throws X509Exception, IOException {
         return getDefaultSSLContextAndOptions().createSSLServerSocket(port);
-    }
-
-    static String[] getDefaultCipherSuites() {
-        return getDefaultCipherSuitesForJavaVersion(System.getProperty("java.specification.version"));
-    }
-
-    static String[] getDefaultCipherSuitesForJavaVersion(String javaVersion) {
-        Objects.requireNonNull(javaVersion);
-        if (javaVersion.matches("\\d+")) {
-            // Must be Java 9 or later
-            LOG.debug("Using Java9+ optimized cipher suites for Java version {}", javaVersion);
-            return DEFAULT_CIPHERS_JAVA9;
-        } else if (javaVersion.startsWith("1.")) {
-            // Must be Java 1.8 or earlier
-            LOG.debug("Using Java8 optimized cipher suites for Java version {}", javaVersion);
-            return DEFAULT_CIPHERS_JAVA8;
-        } else {
-            LOG.debug("Could not parse java version {}, using Java8 optimized cipher suites", javaVersion);
-            return DEFAULT_CIPHERS_JAVA8;
-        }
     }
 
     private FileChangeWatcher newFileChangeWatcher(String fileLocation) throws IOException {

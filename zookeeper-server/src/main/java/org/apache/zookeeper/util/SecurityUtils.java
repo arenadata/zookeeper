@@ -167,6 +167,7 @@ public final class SecurityUtils {
     /**
      * Create an instance of a SaslServer. It will return null if there is an exception.
      *
+     * @param config to check whether FIPS mode is enabled.
      * @param subject subject
      * @param protocol protocol
      * @param serverName server name
@@ -175,6 +176,7 @@ public final class SecurityUtils {
      * @return sasl server object
      */
     public static SaslServer createSaslServer(
+        final ZKConfig config,
         final Subject subject,
         final String protocol,
         final String serverName,
@@ -186,7 +188,7 @@ public final class SecurityUtils {
             if (subject.getPrincipals().size() > 0) {
                 return createGssSaslServer(subject, callbackHandler, LOG);
             } else {
-                return createDigestSaslServer(protocol, serverName, callbackHandler, LOG);
+                return createDigestSaslServer(config, protocol, serverName, callbackHandler, LOG);
             }
         }
         return null;
@@ -286,8 +288,10 @@ public final class SecurityUtils {
     }
 
     /**
-     * Create a DIGEST-MD5 SaslServer. It will return null if there is an exception.
+     * Create a DIGEST-MD5 SaslServer. It will return null if there is an
+     * exception or FIPS mode is enabled.
      *
+     * @param config to check whether FIPS mode is enabled.
      * @param protocol protocol
      * @param serverName server name
      * @param callbackHandler login callback handler
@@ -295,10 +299,15 @@ public final class SecurityUtils {
      * @return sasl server object
      */
     public static SaslServer createDigestSaslServer(
+        final ZKConfig config,
         final String protocol,
         final String serverName,
         final CallbackHandler callbackHandler,
         final Logger LOG) {
+        if (X509Util.getFipsMode(config)) {
+            LOG.warn("SaslServer will not use DIGEST-MD5 as SASL mechanism, because FIPS mode is enabled.");
+            return null;
+        }
         try {
             return Sasl.createSaslServer("DIGEST-MD5", protocol, serverName, null, callbackHandler);
         } catch (SaslException e) {

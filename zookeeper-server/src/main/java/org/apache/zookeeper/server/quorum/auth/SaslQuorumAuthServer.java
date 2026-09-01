@@ -50,6 +50,7 @@ public class SaslQuorumAuthServer implements QuorumAuthServer {
     private final Login serverLogin;
     private final boolean quorumRequireSasl;
     private final AtomicReference<Set<String>> currentAuthzHosts;
+    private final ZKConfig zkConfig;
 
     public SaslQuorumAuthServer(boolean quorumRequireSasl, String loginContext, Set<String> authzHosts) throws SaslException {
         this.quorumRequireSasl = quorumRequireSasl;
@@ -64,7 +65,8 @@ public class SaslQuorumAuthServer implements QuorumAuthServer {
             Supplier<CallbackHandler> callbackSupplier = () -> {
                 return new SaslQuorumServerCallbackHandler(entries, currentAuthzHosts.get());
             };
-            serverLogin = new Login(loginContext, callbackSupplier, new ZKConfig());
+            zkConfig = new ZKConfig();
+            serverLogin = new Login(loginContext, callbackSupplier, zkConfig);
             serverLogin.startThreadIfNeeded();
         } catch (Throwable e) {
             throw new SaslException("Failed to initialize authentication mechanism using SASL", e);
@@ -96,11 +98,15 @@ public class SaslQuorumAuthServer implements QuorumAuthServer {
             dout = new DataOutputStream(sock.getOutputStream());
             byte[] challenge = null;
             ss = SecurityUtils.createSaslServer(
+                zkConfig,
                 serverLogin.getSubject(),
                 QuorumAuth.QUORUM_SERVER_PROTOCOL_NAME,
                 QuorumAuth.QUORUM_SERVER_SASL_DIGEST,
                 serverLogin.newCallbackHandler(),
                 LOG);
+            if (ss == null) {
+                throw new SaslException("Failed to create SaslServer (FIPS mode may be blocking DIGEST-MD5)");
+            }
             while (!ss.isComplete()) {
                 challenge = ss.evaluateResponse(token);
                 if (!ss.isComplete()) {
@@ -157,6 +163,13 @@ public class SaslQuorumAuthServer implements QuorumAuthServer {
                     LOG.error("SaslServer dispose() failed", e);
                 }
             }
+        }
+    }
+
+    @Override
+    public void shutdown() {
+        if (serverLogin != null) {
+            serverLogin.shutdown();
         }
     }
 

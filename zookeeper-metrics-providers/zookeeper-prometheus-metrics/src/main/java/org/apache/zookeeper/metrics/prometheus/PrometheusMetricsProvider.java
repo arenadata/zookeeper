@@ -18,6 +18,7 @@
 
 package org.apache.zookeeper.metrics.prometheus;
 
+import static org.apache.zookeeper.common.LogRedactor.redactSensitiveValues;
 import io.prometheus.client.Collector;
 import io.prometheus.client.CollectorRegistry;
 import io.prometheus.client.exporter.MetricsServlet;
@@ -136,6 +137,7 @@ public class PrometheusMetricsProvider implements MetricsProvider {
 
     @Override
     public void configure(Properties configuration) throws MetricsProviderLifeCycleException {
+        LOG.info("Initializing metrics, configuration: {}", redactSensitiveValues(configuration));
         this.host = configuration.getProperty("httpHost", "0.0.0.0");
         this.port = Integer.parseInt(configuration.getProperty("httpPort", "7000"));
         this.sslEnabled = Boolean.parseBoolean(configuration.getProperty("ssl.enabled", "false"));
