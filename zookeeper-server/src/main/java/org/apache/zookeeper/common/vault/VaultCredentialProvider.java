@@ -25,6 +25,7 @@ import java.security.KeyStore;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Function;
@@ -41,8 +42,8 @@ import org.slf4j.LoggerFactory;
  * secret layout are those of the Hadoop {@code vault://} credential provider, so
  * {@code hadoop credential create} writes secrets this provider reads.
  *
- * <p>A provider is shared by every lookup with the same settings: the process logs in once, and
- * again only when Vault refuses its token. Credentials themselves are read afresh at each lookup.
+ * <p>A provider is shared by every lookup with the same settings and keeps each credential it has
+ * read, or its absence, for the life of the process; {@link #refresh} reads one again.
  */
 public final class VaultCredentialProvider {
 
@@ -84,6 +85,8 @@ public final class VaultCredentialProvider {
 
     private final VaultConnectionInfo connInfo;
     private final VaultHttpClient client;
+    private final ConcurrentMap<String, Optional<String>> credentials = new ConcurrentHashMap<>();
+    private final Object readLock = new Object();
 
     private VaultCredentialProvider(VaultConnectionInfo connInfo, VaultHttpClient client) {
         this.connInfo = connInfo;
@@ -137,13 +140,17 @@ public final class VaultCredentialProvider {
                 + AUTH_METHOD_TOKEN + " or " + AUTH_METHOD_KERBEROS);
         }
         VaultHttpClient client = new VaultHttpClient(connInfo, authMethod,
-            number(settings, CONNECT_TIMEOUT_MS, CONNECT_TIMEOUT_MS_DEFAULT),
-            number(settings, READ_TIMEOUT_MS, READ_TIMEOUT_MS_DEFAULT),
-            number(settings, RETRY_COUNT, RETRY_COUNT_DEFAULT),
-            number(settings, RETRY_INTERVAL_MS, RETRY_INTERVAL_MS_DEFAULT),
+            number(settings, CONNECT_TIMEOUT_MS, CONNECT_TIMEOUT_MS_DEFAULT, 1),
+            number(settings, READ_TIMEOUT_MS, READ_TIMEOUT_MS_DEFAULT, 1),
+            number(settings, RETRY_COUNT, RETRY_COUNT_DEFAULT, 0),
+            number(settings, RETRY_INTERVAL_MS, RETRY_INTERVAL_MS_DEFAULT, 0),
             connInfo.isHttps() ? sslSocketFactory(settings) : null);
         LOG.info("Reading credentials from {} with {} auth", connInfo,
             method == null ? AUTH_METHOD_TOKEN : method.toLowerCase(Locale.ROOT));
+        if (!connInfo.isHttps()) {
+            LOG.warn("{} uses plain http: the Vault token travels unencrypted and Vault is not authenticated",
+                connInfo);
+        }
         return new VaultCredentialProvider(connInfo, client);
     }
 
@@ -166,8 +173,9 @@ public final class VaultCredentialProvider {
         if (location == null) {
             return null;
         }
+        String password = setting(settings, TRUSTSTORE_PASSWORD);
         try {
-            KeyStore trustStore = X509Util.loadTrustStore(location, setting(settings, TRUSTSTORE_PASSWORD),
+            KeyStore trustStore = X509Util.loadTrustStore(location, password == null ? "" : password,
                 setting(settings, TRUSTSTORE_TYPE));
             TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
             tmf.init(trustStore);
@@ -188,15 +196,16 @@ public final class VaultCredentialProvider {
         return value.isEmpty() ? null : value;
     }
 
-    private static int number(Function<String, String> settings, String key, int defaultValue) throws IOException {
+    private static int number(Function<String, String> settings, String key, int defaultValue, int min)
+        throws IOException {
         String value = setting(settings, key);
         if (value == null) {
             return defaultValue;
         }
         try {
             int number = Integer.parseInt(value);
-            if (number < 0) {
-                throw new IOException(key + " must not be negative: " + value);
+            if (number < min) {
+                throw new IOException(key + " must be at least " + min + ": " + value);
             }
             return number;
         } catch (NumberFormatException e) {
@@ -205,20 +214,57 @@ public final class VaultCredentialProvider {
     }
 
     /**
-     * Returns the credential stored under an alias.
+     * Returns the credential stored under an alias, read from Vault on first use.
      *
-     * @param alias the alias
      * @return the credential, or null when Vault holds no such alias
      * @throws IOException if Vault cannot be read
      */
     public char[] getCredential(String alias) throws IOException {
+        Optional<String> value = credentials.get(alias);
+        if (value == null) {
+            synchronized (readLock) {
+                value = credentials.get(alias);
+                if (value == null) {
+                    value = read(alias);
+                    credentials.put(alias, value);
+                }
+            }
+        }
+        return value.map(String::toCharArray).orElse(null);
+    }
+
+    /**
+     * Reads the credential stored under an alias again, keeping the one held so far when Vault
+     * cannot be read.
+     */
+    public void refresh(String alias) {
+        synchronized (readLock) {
+            try {
+                credentials.put(alias, read(alias));
+            } catch (IOException e) {
+                LOG.warn("Keeping the {} read earlier: reading it again from {} failed", alias, connInfo, e);
+            }
+        }
+    }
+
+    private Optional<String> read(String alias) throws IOException {
         VaultConnectionInfo.checkPath(alias);
         String value = client.readField(connInfo.dataPath(alias), connInfo.getField());
         if (value == null) {
             LOG.debug("{} holds no {}", connInfo, alias);
-            return null;
+            return Optional.empty();
         }
         LOG.info("Read {} from {}", alias, connInfo);
-        return value.toCharArray();
+        return Optional.of(stripLineEnd(value));
+    }
+
+    /**
+     * A value written from a file, as by {@code bao kv put key=@file}, keeps the line end of the file.
+     */
+    static String stripLineEnd(String value) {
+        if (value.endsWith("\r\n")) {
+            return value.substring(0, value.length() - 2);
+        }
+        return value.endsWith("\n") ? value.substring(0, value.length() - 1) : value;
     }
 }

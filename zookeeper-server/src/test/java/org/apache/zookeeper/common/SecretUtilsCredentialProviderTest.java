@@ -28,9 +28,12 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.File;
 import java.io.IOException;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.security.Security;
+import java.util.HashMap;
+import java.util.Map;
 import org.apache.zookeeper.common.vault.MockVault;
 import org.apache.zookeeper.common.vault.VaultCredentialProvider;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
@@ -110,6 +113,7 @@ public class SecretUtilsCredentialProviderTest {
         assertEquals("from-file", SecretUtils.getPassword(config, PASSWORD, PASSWORD_PATH));
 
         vault.putSecret("secret/data/zookeeper/ssl.keyStore.password", "value", "from-vault");
+        SecretUtils.refreshCredentials(config, PASSWORD);
         assertEquals("from-vault", SecretUtils.getPassword(config, PASSWORD, PASSWORD_PATH));
     }
 
@@ -139,7 +143,61 @@ public class SecretUtilsCredentialProviderTest {
 
             vault.putSecret("secret/data/zookeeper/ssl.keyStore.password", "value", "keystore-pass");
             vault.putSecret("secret/data/zookeeper/ssl.trustStore.password", "value", "truststore-pass");
+            SecretUtils.refreshCredentials(config, x509Util.getSslKeystorePasswdProperty(),
+                x509Util.getSslTruststorePasswdProperty());
             assertNotNull(x509Util.createSSLContextAndOptions(config).getSSLContext());
         }
+    }
+
+    @Test
+    public void testVaultTrustStoreWithoutPassword() throws Exception {
+        X509TestContext context = X509TestContext.newBuilder()
+            .setTempDir(tempDir)
+            .setKeyStoreKeyType(X509KeyType.EC)
+            .setTrustStoreKeyType(X509KeyType.EC)
+            .build();
+        Map<String, String> settings = new HashMap<>();
+        settings.put(VaultCredentialProvider.TRUSTSTORE_LOCATION,
+            context.getTrustStoreFile(KeyStoreFileType.PEM).getAbsolutePath());
+        assertNotNull(VaultCredentialProvider.get(URI.create("vault://https@localhost:8200/secret/zookeeper"),
+            settings::get));
+    }
+
+    @Test
+    public void testPreloadReadsServerSecretsOnce() throws Exception {
+        vault.putSecret("secret/data/zookeeper/ssl.quorum.keyStore.password", "value", "quorum-pass");
+        System.setProperty(SecretUtils.CREDENTIAL_PROVIDER_PATH, config.getProperty(SecretUtils.CREDENTIAL_PROVIDER_PATH));
+        System.setProperty(VaultCredentialProvider.TOKEN_PATH, config.getProperty(VaultCredentialProvider.TOKEN_PATH));
+        try {
+            SecretUtils.preloadCredentials();
+            int reads = vault.reads();
+            assertTrue(reads > 1);
+            assertEquals("quorum-pass", String.valueOf(SecretUtils.getCredential(null, "ssl.quorum.keyStore.password")));
+            assertNull(SecretUtils.getCredential(null, "ssl.keyStore.password"));
+            assertEquals(reads, vault.reads());
+        } finally {
+            System.clearProperty(SecretUtils.CREDENTIAL_PROVIDER_PATH);
+            System.clearProperty(VaultCredentialProvider.TOKEN_PATH);
+        }
+    }
+
+    @Test
+    public void testPreloadFailsWhileVaultIsUnreachable() {
+        System.setProperty(SecretUtils.CREDENTIAL_PROVIDER_PATH, "vault://http@localhost:1/secret/zookeeper");
+        System.setProperty(VaultCredentialProvider.TOKEN_PATH, config.getProperty(VaultCredentialProvider.TOKEN_PATH));
+        System.setProperty(VaultCredentialProvider.RETRY_COUNT, "0");
+        try {
+            assertThrows(IOException.class, SecretUtils::preloadCredentials);
+        } finally {
+            System.clearProperty(SecretUtils.CREDENTIAL_PROVIDER_PATH);
+            System.clearProperty(VaultCredentialProvider.TOKEN_PATH);
+            System.clearProperty(VaultCredentialProvider.RETRY_COUNT);
+        }
+    }
+
+    @Test
+    public void testPreloadWithoutProviderDoesNothing() throws IOException {
+        SecretUtils.preloadCredentials();
+        assertEquals(0, vault.reads());
     }
 }

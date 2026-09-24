@@ -20,6 +20,7 @@ package org.apache.zookeeper.metrics.prometheus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.sun.net.httpserver.HttpServer;
 import io.prometheus.client.CollectorRegistry;
 import java.io.FileInputStream;
@@ -36,7 +37,10 @@ import java.nio.file.Paths;
 import java.security.KeyStore;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.KeyManagerFactory;
@@ -175,18 +179,26 @@ public class PrometheusMetricsProviderSslTest {
         }
     }
 
-    @Test
-    public void testPasswordsFromCredentialProvider() throws Exception {
+    /**
+     * Code that runs while a fake KV v2 engine serves the credential provider.
+     */
+    private interface VaultBody {
+        void run() throws Exception;
+    }
+
+    /**
+     * Serves the given secrets of secret/zookeeper, by alias, as the credential provider while the body runs.
+     */
+    private static void withVault(Map<String, String> secrets, VaultBody body) throws Exception {
         HttpServer vault = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
         vault.createContext("/v1/", exchange -> {
             String path = exchange.getRequestURI().getPath();
-            String secret = path.endsWith("/metricsProvider.ssl.keyStore.password") ? PASSWORD
-                : path.endsWith("/metricsProvider.ssl.keyStore.keyPassword") ? KEY_PASSWORD : null;
-            byte[] body = (secret == null ? "{\"errors\":[]}" : "{\"data\":{\"data\":{\"value\":\"" + secret + "\"}}}")
-                    .getBytes(StandardCharsets.UTF_8);
-            exchange.sendResponseHeaders(secret == null ? 404 : 200, body.length);
+            String secret = secrets.get(path.substring(path.lastIndexOf('/') + 1));
+            String json = secret == null ? "{\"errors\":[]}" : "{\"data\":{\"data\":{\"value\":\"" + secret + "\"}}}";
+            byte[] response = json.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(secret == null ? 404 : 200, response.length);
             try (OutputStream os = exchange.getResponseBody()) {
-                os.write(body);
+                os.write(response);
             }
         });
         vault.start();
@@ -196,6 +208,20 @@ public class PrometheusMetricsProviderSslTest {
                 "vault://http@127.0.0.1:" + vault.getAddress().getPort() + "/secret/zookeeper");
         System.setProperty(VaultCredentialProvider.TOKEN_PATH, tokenFile.toString());
         try {
+            body.run();
+        } finally {
+            System.clearProperty(SecretUtils.CREDENTIAL_PROVIDER_PATH);
+            System.clearProperty(VaultCredentialProvider.TOKEN_PATH);
+            vault.stop(0);
+        }
+    }
+
+    @Test
+    public void testPasswordsFromCredentialProvider() throws Exception {
+        Map<String, String> secrets = new HashMap<>();
+        secrets.put("metricsProvider.ssl.keyStore.password", PASSWORD);
+        secrets.put("metricsProvider.ssl.keyStore.keyPassword", KEY_PASSWORD);
+        withVault(secrets, () -> {
             Properties overrides = new Properties();
             overrides.setProperty("ssl.keyStore.location", jksKeyStoreWithKeyPassword);
             overrides.setProperty("ssl.keyStore.type", "JKS");
@@ -208,11 +234,26 @@ public class PrometheusMetricsProviderSslTest {
             } finally {
                 provider.stop();
             }
-        } finally {
-            System.clearProperty(SecretUtils.CREDENTIAL_PROVIDER_PATH);
-            System.clearProperty(VaultCredentialProvider.TOKEN_PATH);
-            vault.stop(0);
-        }
+        });
+    }
+
+    @Test
+    public void testKeystorePasswordMissingEverywhere() throws Exception {
+        withVault(Collections.emptyMap(), () -> {
+            CollectorRegistry.defaultRegistry.clear();
+            PrometheusMetricsProvider provider = new PrometheusMetricsProvider();
+            Properties configuration = new Properties();
+            configuration.setProperty("httpHost", "127.0.0.1");
+            configuration.setProperty("httpPort", "0");
+            configuration.setProperty("exportJvmInfo", "false");
+            configuration.setProperty("ssl.enabled", "true");
+            configuration.setProperty("ssl.keyStore.location", serverKeyStore);
+            configuration.setProperty("ssl.keyStore.type", "PKCS12");
+            provider.configure(configuration);
+            MetricsProviderLifeCycleException e =
+                    assertThrows(MetricsProviderLifeCycleException.class, provider::start);
+            assertTrue(e.getMessage().contains("holds no metricsProvider.ssl.keyStore.password"), e.getMessage());
+        });
     }
 
     @Test

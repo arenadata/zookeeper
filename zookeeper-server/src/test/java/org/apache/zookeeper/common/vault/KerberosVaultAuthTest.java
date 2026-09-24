@@ -56,6 +56,7 @@ public class KerberosVaultAuthTest {
     private static final String SERVER = "HTTP/localhost";
     private static final String NEGOTIATE = "Negotiate ";
     private static final String DATA_PATH = "secret/data/zookeeper/ssl.quorum.keyStore.password";
+    private static final String TRUSTSTORE_DATA_PATH = "secret/data/zookeeper/ssl.quorum.trustStore.password";
 
     @TempDir
     static File tempDir;
@@ -112,10 +113,10 @@ public class KerberosVaultAuthTest {
     @BeforeEach
     public void setUp() throws IOException {
         vault = new MockVault();
-        vault.setLoginHandler(authorization ->
-            (CLIENT + "@" + kdc.getRealm()).equals(acceptSpnego(authorization)) ? "s.kerberos" : null);
+        vault.setLoginHandler(KerberosVaultAuthTest::login);
         vault.revokeToken(MockVault.TOKEN);
         vault.putSecret(DATA_PATH, "value", "s3cret");
+        vault.putSecret(TRUSTSTORE_DATA_PATH, "value", "tr0st");
         settings = new HashMap<>();
         settings.put(VaultCredentialProvider.AUTH_METHOD, VaultCredentialProvider.AUTH_METHOD_KERBEROS);
         settings.put(VaultCredentialProvider.KERBEROS_LOGIN_CONTEXT, "VaultClient");
@@ -130,8 +131,15 @@ public class KerberosVaultAuthTest {
     }
 
     private char[] read() throws IOException {
-        return VaultCredentialProvider.get(URI.create(vault.uri("secret/zookeeper")), settings::get)
-            .getCredential("ssl.quorum.keyStore.password");
+        return read(vault.uri("secret/zookeeper"), "ssl.quorum.keyStore.password");
+    }
+
+    private char[] read(String uri, String alias) throws IOException {
+        return VaultCredentialProvider.get(URI.create(uri), settings::get).getCredential(alias);
+    }
+
+    private static String login(String authorization) throws Exception {
+        return (CLIENT + "@" + kdc.getRealm()).equals(acceptSpnego(authorization)) ? "s.kerberos" : null;
     }
 
     /**
@@ -178,8 +186,26 @@ public class KerberosVaultAuthTest {
     public void testLogsInAgainWhenTheTokenIsRefused() throws Exception {
         read();
         vault.revokeToken("s.kerberos");
-        assertArrayEquals("s3cret".toCharArray(), read());
+        assertArrayEquals("tr0st".toCharArray(), read(vault.uri("secret/zookeeper"), "ssl.quorum.trustStore.password"));
         assertEquals(2, vault.loginRoles().size());
+    }
+
+    @Test
+    public void testHostOfServicePrincipalIsLowerCased() throws Exception {
+        assertArrayEquals("s3cret".toCharArray(),
+            read("vault://http@LocalHost:" + vault.port() + "/secret/zookeeper", "ssl.quorum.keyStore.password"));
+    }
+
+    @Test
+    public void testFollowsLoginRedirectWithTheToken() throws Exception {
+        try (MockVault active = new MockVault()) {
+            active.setLoginHandler(KerberosVaultAuthTest::login);
+            vault.redirectLoginTo(active);
+            vault.acceptToken("s.kerberos");
+            assertArrayEquals("s3cret".toCharArray(), read());
+            assertEquals(1, active.loginRoles().size());
+            assertEquals(0, vault.loginRoles().size());
+        }
     }
 
     @Test

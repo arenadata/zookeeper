@@ -750,6 +750,7 @@ public abstract class X509Util implements Closeable, AutoCloseable {
                 "Attempting to reset default SSL context after receiving watch event: {} with context: {}",
                 event.kind(),
                 event.context());
+            SecretUtils.refreshCredentials(new ZKConfig(), sslKeystorePasswdProperty, sslTruststorePasswdProperty);
             try {
                 this.resetDefaultSSLContextAndOptions();
             } catch (SSLContextException e) {

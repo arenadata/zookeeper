@@ -208,6 +208,11 @@ public class PrometheusMetricsProvider implements MetricsProvider {
                 LOG.info("SSL enabled for /metrics endpoint");
                 String resolvedKeyStorePassword = resolvePassword("ssl.keyStore.password", keyStorePassword,
                         keyStorePasswordPath);
+                if (resolvedKeyStorePassword == null) {
+                    throw new MetricsProviderLifeCycleException("neither ssl.keyStore.password nor "
+                            + "ssl.keyStore.passwordPath is configured, and the credential provider holds no "
+                            + CREDENTIAL_ALIAS_PREFIX + "ssl.keyStore.password");
+                }
                 SslContextFactory.Server sslContextFactory = new SslContextFactory.Server();
                 KeyStore keyStore = X509Util.loadKeyStore(keyStoreLocation, resolvedKeyStorePassword, keyStoreType);
                 sslContextFactory.setKeyStore(keyStore);

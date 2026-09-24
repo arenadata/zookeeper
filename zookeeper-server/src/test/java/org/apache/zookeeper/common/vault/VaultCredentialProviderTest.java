@@ -42,6 +42,8 @@ public class VaultCredentialProviderTest {
 
     private static final String ALIAS = "ssl.keyStore.password";
     private static final String DATA_PATH = "secret/data/zookeeper/" + ALIAS;
+    private static final String TRUSTSTORE_ALIAS = "ssl.trustStore.password";
+    private static final String TRUSTSTORE_DATA_PATH = "secret/data/zookeeper/" + TRUSTSTORE_ALIAS;
 
     @TempDir
     File tempDir;
@@ -115,13 +117,69 @@ public class VaultCredentialProviderTest {
     @Test
     public void testRotatedTokenIsReadAfterRefusal() throws Exception {
         vault.putSecret(DATA_PATH, "value", "s3cret");
+        vault.putSecret(TRUSTSTORE_DATA_PATH, "value", "tr0st");
         VaultCredentialProvider provider = provider("secret/zookeeper");
         provider.getCredential(ALIAS);
 
         vault.revokeToken(MockVault.TOKEN);
         vault.acceptToken("s.rotated");
         writeToken("s.rotated");
+        assertArrayEquals("tr0st".toCharArray(), provider.getCredential(TRUSTSTORE_ALIAS));
+    }
+
+    @Test
+    public void testCredentialsAreKept() throws Exception {
+        vault.putSecret(DATA_PATH, "value", "s3cret");
+        VaultCredentialProvider provider = provider("secret/zookeeper");
+        provider.getCredential(ALIAS);
+        provider.getCredential(ALIAS);
+        provider.getCredential(TRUSTSTORE_ALIAS);
+        provider.getCredential(TRUSTSTORE_ALIAS);
+        assertEquals(2, vault.reads());
+    }
+
+    @Test
+    public void testRefreshReadsAgain() throws Exception {
+        vault.putSecret(DATA_PATH, "value", "s3cret");
+        VaultCredentialProvider provider = provider("secret/zookeeper");
+        provider.getCredential(ALIAS);
+        vault.putSecret(DATA_PATH, "value", "r0tated");
+        provider.refresh(ALIAS);
+        assertArrayEquals("r0tated".toCharArray(), provider.getCredential(ALIAS));
+    }
+
+    @Test
+    public void testRefreshKeepsCredentialWhenVaultFails() throws Exception {
+        vault.putSecret(DATA_PATH, "value", "s3cret");
+        VaultCredentialProvider provider = provider("secret/zookeeper");
+        provider.getCredential(ALIAS);
+        vault.fail(503, 100);
+        provider.refresh(ALIAS);
         assertArrayEquals("s3cret".toCharArray(), provider.getCredential(ALIAS));
+    }
+
+    @Test
+    public void testPolicyDenialIsAbsence() throws Exception {
+        vault.putSecret(DATA_PATH, "value", "s3cret");
+        vault.deny(DATA_PATH);
+        assertNull(provider("secret/zookeeper").getCredential(ALIAS));
+    }
+
+    @Test
+    public void testLineEndIsStripped() throws Exception {
+        vault.putSecret(DATA_PATH, "value", "s3cret\n");
+        vault.putSecret(TRUSTSTORE_DATA_PATH, "value", "tr0st\r\n");
+        assertArrayEquals("s3cret".toCharArray(), provider("secret/zookeeper").getCredential(ALIAS));
+        assertArrayEquals("tr0st".toCharArray(), provider("secret/zookeeper").getCredential(TRUSTSTORE_ALIAS));
+        assertEquals("a\n", VaultCredentialProvider.stripLineEnd("a\n\n"));
+        assertEquals("a b", VaultCredentialProvider.stripLineEnd("a b"));
+    }
+
+    @Test
+    public void testZeroTimeoutIsRejected() {
+        settings.put(VaultCredentialProvider.READ_TIMEOUT_MS, "0");
+        IOException e = assertThrows(IOException.class, () -> provider("secret/zookeeper"));
+        assertThat(e.getMessage(), containsString(VaultCredentialProvider.READ_TIMEOUT_MS));
     }
 
     @Test
@@ -204,6 +262,16 @@ public class VaultCredentialProviderTest {
         assertEquals("s.systemd", new TokenVaultAuth(null, env::get).resolveToken());
 
         assertEquals(MockVault.TOKEN, new TokenVaultAuth(tokenFile.getAbsolutePath(), env::get).resolveToken());
+    }
+
+    @Test
+    public void testEmptyTokenFileIsAnError() throws Exception {
+        writeToken("");
+        Map<String, String> env = new HashMap<>();
+        env.put(TokenVaultAuth.VAULT_TOKEN_ENV, "s.env");
+        IOException e = assertThrows(IOException.class,
+            () -> new TokenVaultAuth(tokenFile.getAbsolutePath(), env::get).resolveToken());
+        assertThat(e.getMessage(), containsString("is empty"));
     }
 
     @Test

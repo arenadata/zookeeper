@@ -25,10 +25,10 @@ import java.nio.file.Files;
 import java.util.function.Function;
 
 /**
- * A Vault token read from the file named by {@link VaultCredentialProvider#TOKEN_PATH}, else from
- * the systemd credential {@value #SYSTEMD_CREDENTIAL_NAME}, else from the {@value #VAULT_TOKEN_ENV}
- * environment variable. The token is read again at every login, so a rotated token is picked up
- * once Vault refuses the old one.
+ * A Vault token read from the file named by {@link VaultCredentialProvider#TOKEN_PATH}; without
+ * one, from the systemd credential {@value #SYSTEMD_CREDENTIAL_NAME}, else from the
+ * {@value #VAULT_TOKEN_ENV} environment variable. The token is read again at every login, so a
+ * rotated token is picked up once Vault refuses the old one.
  */
 final class TokenVaultAuth implements VaultAuthMethod {
 
@@ -56,19 +56,24 @@ final class TokenVaultAuth implements VaultAuthMethod {
     }
 
     String resolveToken() throws IOException {
-        String token = null;
-        if (tokenPath != null && !tokenPath.isEmpty()) {
+        String token;
+        if (tokenPath != null) {
             token = readToken(new File(tokenPath));
-        }
-        String credentialsDirectory = env.apply(CREDENTIALS_DIRECTORY_ENV);
-        if (token == null && credentialsDirectory != null && !credentialsDirectory.isEmpty()) {
-            File credential = new File(credentialsDirectory, SYSTEMD_CREDENTIAL_NAME);
-            if (credential.isFile()) {
-                token = readToken(credential);
+            if (token == null) {
+                throw new IOException("Vault token file " + tokenPath + " is empty");
             }
-        }
-        if (token == null) {
-            token = trimToNull(env.apply(VAULT_TOKEN_ENV));
+        } else {
+            token = null;
+            String credentialsDirectory = env.apply(CREDENTIALS_DIRECTORY_ENV);
+            if (credentialsDirectory != null && !credentialsDirectory.isEmpty()) {
+                File credential = new File(credentialsDirectory, SYSTEMD_CREDENTIAL_NAME);
+                if (credential.isFile()) {
+                    token = readToken(credential);
+                }
+            }
+            if (token == null) {
+                token = trimToNull(env.apply(VAULT_TOKEN_ENV));
+            }
         }
         if (token != null) {
             checkToken(token);

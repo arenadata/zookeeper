@@ -2043,11 +2043,14 @@ Passwords that would otherwise be written to zoo.cfg can be kept in the KV v2
 secrets engine of HashiCorp Vault or OpenBao. A secret is looked up under the
 key of the property it replaces, as written in zoo.cfg (the Java system
 property without the `zookeeper.` prefix). It takes precedence over the
-property and its `passwordPath` file; a key the engine does not hold falls
-back to them. The URI and the secret layout are those of the Hadoop `vault://`
-credential provider: every key is a separate secret whose `value` field holds
-the password, so `hadoop credential create <key> -provider <uri>` or
-`bao kv put <mount>/<path>/<key> value=<password>` stores it.
+property and its `passwordPath` file; a key the engine does not hold, or the
+token's policy does not allow to read, falls back to them. The URI and the
+secret layout are those of the Hadoop `vault://` credential provider: every key
+is a separate secret whose `value` field holds the password, so
+`hadoop credential create <key> -provider <uri>` or
+`bao kv put <mount>/<path>/<key> value=<password>` stores it. One line end at
+the end of a value is dropped, as for `passwordPath` files, so
+`value=@file` stores a password file as it is.
 
 | Key | Password of |
 |-----|-------------|
@@ -2058,10 +2061,17 @@ the password, so `hadoop credential create <key> -provider <uri>` or
 | DigestAuthenticationProvider.superDigest | the digest super user |
 | tokenAuth.secret | the static delegation token master key, used as UTF-8 bytes in place of *tokenAuth.secretFile* |
 
-The server reads the secrets when it starts and whenever it builds a TLS
-context again, for example after a certificate reload, so it does not start
-while the secrets engine is unreachable. A client reads its TLS passwords when
-it connects. JAAS passwords and keytabs are not read from the provider.
+The server reads all of these keys when it starts, so it does not start while
+the secrets engine is unreachable, and keeps them in memory. A certificate
+reload reads the TLS store passwords again and keeps the old ones if the engine
+cannot be reached; the other keys change on restart. A client reads its TLS
+passwords on its first connection and keeps them; it needs jackson-databind on
+its classpath, which the server distribution ships. JAAS passwords and keytabs
+are not read from the provider.
+
+Telling a policy that denies a key from a token that is no longer valid takes
+a token lookup, so the token's policies must allow reading
+`auth/token/lookup-self`, as the `default` policy does.
 
 * *credentialProvider.path* :
     (Java system property: **zookeeper.credentialProvider.path**)
@@ -2069,7 +2079,9 @@ it connects. JAAS passwords and keytabs are not read from the provider.
     `vault://[protocol@]host[:port]/mount[/path][?key=field]`, for example
     `vault://https@bao.example.com:8200/secret/zookeeper`. The protocol is
     `https` or `http` and defaults to `https`, the port defaults to 8200, and
-    `key` names the field that holds a password.
+    `key` names the field that holds a password. Over `http` the Vault token
+    travels unencrypted and nothing proves the server is Vault, so it suits
+    tests only.
     Default: not set, no provider
 
 * *credentialProvider.vault.authMethod* :
@@ -2079,15 +2091,16 @@ it connects. JAAS passwords and keytabs are not read from the provider.
     must pass that header through, as for the `bao` CLI:
     `bao auth enable -passthrough-request-headers=Authorization kerberos`,
     or `bao auth tune -passthrough-request-headers=Authorization kerberos/`
-    for an existing mount.
+    for an existing mount. A login that a standby node redirects to the active
+    node follows the redirect with the header.
     Default: **token**
 
 * *credentialProvider.vault.tokenPath* :
     (Java system property: **zookeeper.credentialProvider.vault.tokenPath**)
-    File that holds the Vault token. When not set, the token is read from the
-    systemd credential `vault-token` in `$CREDENTIALS_DIRECTORY`, else from
-    the `VAULT_TOKEN` environment variable. The token is read again whenever
-    Vault refuses the current one.
+    File that holds the Vault token; an empty file is an error. When not set,
+    the token is read from the systemd credential `vault-token` in
+    `$CREDENTIALS_DIRECTORY`, else from the `VAULT_TOKEN` environment variable.
+    The token is read again whenever Vault refuses the current one.
 
 * *credentialProvider.vault.kerberos.loginContext* :
     (Java system property: **zookeeper.credentialProvider.vault.kerberos.loginContext**)
@@ -2098,7 +2111,7 @@ it connects. JAAS passwords and keytabs are not read from the provider.
 
 * *credentialProvider.vault.kerberos.servicePrincipal* :
     (Java system property: **zookeeper.credentialProvider.vault.kerberos.servicePrincipal**)
-    Service principal of Vault; `_HOST` stands for the Vault host.
+    Service principal of Vault; `_HOST` stands for the Vault host in lower case.
     Default: `HTTP@<Vault host>`
 
 * *credentialProvider.vault.kerberos.mountPath* :
@@ -2122,7 +2135,7 @@ it connects. JAAS passwords and keytabs are not read from the provider.
 * *credentialProvider.vault.connectTimeoutMs* and *credentialProvider.vault.readTimeoutMs* :
     (Java system properties: **zookeeper.credentialProvider.vault.connectTimeoutMs** and
     **zookeeper.credentialProvider.vault.readTimeoutMs**)
-    Timeouts of the requests to Vault.
+    Timeouts of the requests to Vault, at least 1.
     Default: **30000**
 
 * *credentialProvider.vault.retryCount* and *credentialProvider.vault.retryIntervalMs* :

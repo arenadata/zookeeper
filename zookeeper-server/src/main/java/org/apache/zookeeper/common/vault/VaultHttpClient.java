@@ -38,13 +38,17 @@ import org.slf4j.LoggerFactory;
 
 /**
  * HTTP client of the Vault KV v2 read API. Transport failures and 5xx or 429 answers are retried
- * at a fixed interval; a 401 or 403 answer gets one fresh login.
+ * at a fixed interval. A 401 or 403 answer to a token Vault still accepts is a policy that denies
+ * the path; to any other token it gets one fresh login.
  */
 final class VaultHttpClient {
 
     private static final Logger LOG = LoggerFactory.getLogger(VaultHttpClient.class);
 
     private static final String TOKEN_HEADER = "X-Vault-Token";
+    private static final int TEMPORARY_REDIRECT = 307;
+    private static final int PERMANENT_REDIRECT = 308;
+    private static final int MAX_REDIRECTS = 3;
     private static final int TOO_MANY_REQUESTS = 429;
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -74,7 +78,8 @@ final class VaultHttpClient {
      *
      * @param dataPath the KV v2 data path
      * @param field the field within the secret
-     * @return the field, or null when the secret, its current version or the field does not exist
+     * @return the field, or null when the secret, its current version or the field does not exist,
+     *         or when the policy of the token denies reading it
      * @throws IOException if the request fails or the field is not a scalar
      */
     String readField(String dataPath, String field) throws IOException {
@@ -82,6 +87,10 @@ final class VaultHttpClient {
         Response response = execute(url);
         if (response.status == HttpURLConnection.HTTP_NOT_FOUND) {
             checkAbsent(response);
+            return null;
+        }
+        if (response.status == HttpURLConnection.HTTP_UNAUTHORIZED || response.status == HttpURLConnection.HTTP_FORBIDDEN) {
+            LOG.info("The Vault policy denies reading {}; treating it as absent", dataPath);
             return null;
         }
         JsonNode value = parse(response.body, url).path("data").path("data").path(field);
@@ -139,11 +148,14 @@ final class VaultHttpClient {
                     return response;
                 }
                 if (status == HttpURLConnection.HTTP_UNAUTHORIZED || status == HttpURLConnection.HTTP_FORBIDDEN) {
+                    if (isAccepted(token)) {
+                        return response;
+                    }
                     if (reauthenticated) {
                         throw response.failure();
                     }
                     reauthenticated = true;
-                    LOG.debug("{} answered {}, logging in again", action, status);
+                    LOG.debug("{} answered {} and the token is no longer valid, logging in again", action, status);
                     login(token);
                     continue;
                 }
@@ -159,6 +171,19 @@ final class VaultHttpClient {
             }
             attempt++;
             sleep(retryIntervalMs);
+        }
+    }
+
+    /**
+     * Whether Vault still accepts the token. A token whose policy has no access to
+     * {@code auth/token/lookup-self} counts as refused.
+     */
+    private boolean isAccepted(String token) {
+        try {
+            return get(connInfo.apiUrl("auth/token/lookup-self"), token).status == HttpURLConnection.HTTP_OK;
+        } catch (IOException e) {
+            LOG.debug("Vault token lookup failed", e);
+            return false;
         }
     }
 
@@ -207,24 +232,41 @@ final class VaultHttpClient {
     }
 
     /**
-     * POSTs a JSON body with the given Authorization header and returns the response body.
+     * POSTs a JSON body with the given Authorization header and returns the response body. A
+     * redirect, such as a standby node sends, is followed with the header: the JDK would drop it.
      *
      * @throws RequestFailedException if the answer is not 200
      */
     String post(String url, String authorization, String jsonBody) throws IOException {
-        HttpURLConnection conn = open(url, "POST");
-        conn.setRequestProperty("Authorization", authorization);
-        conn.setRequestProperty("Content-Type", "application/json");
-        conn.setDoOutput(true);
-        try (OutputStream os = conn.getOutputStream()) {
-            os.write(jsonBody.getBytes(StandardCharsets.UTF_8));
+        URL target = new URL(url);
+        for (int redirects = 0; ; redirects++) {
+            HttpURLConnection conn = open(target.toString(), "POST");
+            conn.setInstanceFollowRedirects(false);
+            conn.setRequestProperty("Authorization", authorization);
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setDoOutput(true);
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(jsonBody.getBytes(StandardCharsets.UTF_8));
+            }
+            int status = conn.getResponseCode();
+            if (status == HttpURLConnection.HTTP_OK) {
+                return readBody(conn.getInputStream());
+            }
+            String location = conn.getHeaderField("Location");
+            if ((status == TEMPORARY_REDIRECT || status == PERMANENT_REDIRECT) && location != null
+                && redirects < MAX_REDIRECTS) {
+                readBody(conn.getInputStream());
+                URL next = new URL(target, location);
+                if (!next.getProtocol().equals(target.getProtocol())) {
+                    throw new IOException("POST " + target + " was redirected to " + next + " over another protocol");
+                }
+                LOG.debug("Following the redirect of POST {} to {}", target, next);
+                target = next;
+                continue;
+            }
+            throw new RequestFailedException(status,
+                "POST " + target + " failed with status " + status + ": " + readBody(conn.getErrorStream()));
         }
-        int status = conn.getResponseCode();
-        if (status == HttpURLConnection.HTTP_OK) {
-            return readBody(conn.getInputStream());
-        }
-        throw new RequestFailedException(status,
-            "POST " + url + " failed with status " + status + ": " + readBody(conn.getErrorStream()));
     }
 
     private Response get(String url, String token) throws IOException {

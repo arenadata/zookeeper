@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.util.Collections;
 import java.util.List;
@@ -37,6 +38,8 @@ import org.apache.zookeeper.common.SecretUtils;
 import org.apache.zookeeper.common.vault.MockVault;
 import org.apache.zookeeper.common.vault.VaultCredentialProvider;
 import org.apache.zookeeper.data.Id;
+import org.apache.zookeeper.server.ServerConfig;
+import org.apache.zookeeper.server.ZooKeeperServerMain;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -68,6 +71,7 @@ public class CredentialProviderAuthTest {
         System.clearProperty(SecretUtils.CREDENTIAL_PROVIDER_PATH);
         System.clearProperty(VaultCredentialProvider.TOKEN_PATH);
         System.clearProperty(VaultCredentialProvider.RETRY_INTERVAL_MS);
+        System.clearProperty(VaultCredentialProvider.RETRY_COUNT);
         System.clearProperty(SUPER_DIGEST);
         System.clearProperty(SUPER_PASSWORD);
         vault.close();
@@ -94,9 +98,19 @@ public class CredentialProviderAuthTest {
     }
 
     @Test
-    public void testSuperDigestWhenProviderFails() {
+    public void testSuperDigestFailsClosed() throws Exception {
+        System.setProperty(SUPER_DIGEST, DigestAuthenticationProvider.generateDigest("super:property"));
         vault.revokeToken(MockVault.TOKEN);
-        assertThrows(IllegalStateException.class, DigestAuthenticationProvider::new);
+        assertFalse(authenticate("super:property").contains(SUPER));
+    }
+
+    @Test
+    public void testServerDoesNotStartWhileVaultIsUnreachable() throws Exception {
+        System.setProperty(SecretUtils.CREDENTIAL_PROVIDER_PATH, "vault://http@localhost:1/secret/zookeeper");
+        System.setProperty(VaultCredentialProvider.RETRY_COUNT, "0");
+        ServerConfig config = new ServerConfig();
+        config.parse(new String[] {"0", tempDir.getAbsolutePath()});
+        assertThrows(IOException.class, () -> new ZooKeeperServerMain().runFromConfig(config));
     }
 
     private static char[] superPassword(SaslServerCallbackHandler handler) throws Exception {

@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.security.PrivilegedActionException;
 import java.security.PrivilegedExceptionAction;
 import java.util.Base64;
+import java.util.Locale;
 import javax.security.auth.Subject;
 import javax.security.auth.login.LoginContext;
 import javax.security.auth.login.LoginException;
@@ -58,17 +59,16 @@ final class KerberosVaultAuth implements VaultAuthMethod {
      *
      * @param connInfo the Vault server
      * @param loginContext the JAAS section to log in with
-     * @param servicePrincipal the Vault service principal; {@code _HOST} stands for the Vault host,
-     *                         null means {@code HTTP@<Vault host>}
+     * @param servicePrincipal the Vault service principal; {@code _HOST} stands for the Vault host
+     *                         in lower case, null means {@code HTTP@<Vault host>}
      * @param mountPath the mount path of the Kerberos auth method
      * @param role the role to log in with, or null to let Vault pick the one bound to the principal
      */
     KerberosVaultAuth(VaultConnectionInfo connInfo, String loginContext, String servicePrincipal, String mountPath,
                       String role) throws IOException {
         this.loginContext = loginContext;
-        this.servicePrincipal = servicePrincipal == null
-            ? "HTTP@" + connInfo.getHost()
-            : servicePrincipal.replace(HOSTNAME_PATTERN, connInfo.getHost());
+        String host = connInfo.getHost().toLowerCase(Locale.ROOT);
+        this.servicePrincipal = servicePrincipal == null ? "HTTP@" + host : servicePrincipal.replace(HOSTNAME_PATTERN, host);
         String mount = VaultConnectionInfo.stripSlashes(mountPath);
         VaultConnectionInfo.checkPath(mount);
         this.loginUrl = connInfo.apiUrl(mount + "/login");

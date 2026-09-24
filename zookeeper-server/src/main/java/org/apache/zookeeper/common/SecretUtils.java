@@ -42,15 +42,29 @@ public final class SecretUtils {
 
     private static final String PROPERTY_PREFIX = "zookeeper.";
 
+    /**
+     * Aliases the server looks up. Reading them at startup fails the start while the provider is
+     * unreachable, and keeps later lookups, some of them on network threads, from waiting on it.
+     */
+    private static final String[] SERVER_ALIASES = {
+        "ssl.keyStore.password",
+        "ssl.trustStore.password",
+        "ssl.quorum.keyStore.password",
+        "ssl.quorum.trustStore.password",
+        "SASLAuthenticationProvider.superPassword",
+        "DigestAuthenticationProvider.superDigest",
+        "tokenAuth.secret",
+        "metricsProvider.ssl.keyStore.password",
+        "metricsProvider.ssl.keyStore.keyPassword",
+        "metricsProvider.ssl.trustStore.password",
+    };
+
     private SecretUtils() {
     }
 
     /**
      * Returns the alias the credential provider stores the secret of a property under: the
      * property name without the {@code zookeeper.} prefix, as the key is written in zoo.cfg.
-     *
-     * @param propertyName the property name
-     * @return the alias
      */
     public static String aliasOf(String propertyName) {
         return propertyName.startsWith(PROPERTY_PREFIX) ? propertyName.substring(PROPERTY_PREFIX.length()) : propertyName;
@@ -68,15 +82,60 @@ public final class SecretUtils {
     }
 
     /**
-     * Returns the secret the credential provider holds under an alias.
+     * Returns the secret the credential provider holds under an alias. The provider keeps what it
+     * has read for the life of the process.
      *
      * @param config the configuration to read the provider settings from before the system
      *               properties, or null for the system properties alone
-     * @param alias the alias
      * @return the secret, or null when no provider is configured or it holds no such alias
      * @throws IOException if the provider cannot be read
      */
     public static char[] getCredential(ZKConfig config, String alias) throws IOException {
+        VaultCredentialProvider provider = provider(config);
+        if (provider == null) {
+            return null;
+        }
+        try {
+            return provider.getCredential(alias);
+        } catch (NoClassDefFoundError e) {
+            throw missingJackson(e);
+        }
+    }
+
+    /**
+     * Reads the secrets the server looks up from the credential provider, if one is configured.
+     *
+     * @throws IOException if the provider cannot be read
+     */
+    public static void preloadCredentials() throws IOException {
+        for (String alias : SERVER_ALIASES) {
+            getCredential(null, alias);
+        }
+    }
+
+    /**
+     * Reads the secrets of the given properties from the credential provider again, keeping those
+     * read before when the provider cannot be read.
+     *
+     * @param config the configuration to read the provider settings from before the system
+     *               properties, or null for the system properties alone
+     */
+    public static void refreshCredentials(ZKConfig config, String... propertyNames) {
+        try {
+            VaultCredentialProvider provider = provider(config);
+            if (provider != null) {
+                for (String propertyName : propertyNames) {
+                    provider.refresh(aliasOf(propertyName));
+                }
+            }
+        } catch (IOException e) {
+            LOG.warn("Keeping the credentials read earlier", e);
+        } catch (NoClassDefFoundError e) {
+            LOG.warn("Keeping the credentials read earlier", missingJackson(e));
+        }
+    }
+
+    private static VaultCredentialProvider provider(ZKConfig config) throws IOException {
         String path = setting(config, CREDENTIAL_PROVIDER_PATH);
         if (path == null) {
             return null;
@@ -91,7 +150,20 @@ public final class SecretUtils {
             throw new IOException("Unsupported credential provider " + path + ": only "
                 + VaultCredentialProvider.SCHEME + ":// is supported");
         }
-        return VaultCredentialProvider.get(uri, key -> setting(config, key)).getCredential(alias);
+        try {
+            return VaultCredentialProvider.get(uri, key -> setting(config, key));
+        } catch (NoClassDefFoundError e) {
+            throw missingJackson(e);
+        }
+    }
+
+    /**
+     * jackson-databind is a provided dependency: the server distribution ships it, a client
+     * application has to add it.
+     */
+    private static IOException missingJackson(NoClassDefFoundError e) {
+        return new IOException("The " + VaultCredentialProvider.SCHEME
+            + ":// credential provider needs jackson-databind on the classpath", e);
     }
 
     /**
@@ -99,10 +171,8 @@ public final class SecretUtils {
      * the alias of the property, else the content of the file named by the path property, else
      * the property value, else the empty string.
      *
-     * @param config the configuration
      * @param propertyName the password property
      * @param pathPropertyName the property naming a file that holds the password
-     * @return the password
      * @throws IllegalStateException if the credential provider or the file cannot be read
      */
     public static String getPassword(ZKConfig config, String propertyName, String pathPropertyName) {

@@ -65,15 +65,18 @@ public class DigestAuthenticationProvider implements AuthenticationProvider {
      */
     private final String superDigest = resolveSuperDigest();
 
+    /**
+     * Fails closed: when the credential provider cannot be read, no digest grants super access.
+     */
     private static String resolveSuperDigest() {
-        char[] credential;
+        String alias = SecretUtils.aliasOf(SUPER_DIGEST);
         try {
-            credential = SecretUtils.getCredential(null, SecretUtils.aliasOf(SUPER_DIGEST));
+            char[] credential = SecretUtils.getCredential(null, alias);
+            return credential == null ? System.getProperty(SUPER_DIGEST) : String.valueOf(credential);
         } catch (IOException e) {
-            throw new IllegalStateException("Failed to read " + SecretUtils.aliasOf(SUPER_DIGEST)
-                + " from the credential provider", e);
+            LOG.error("Super user digest disabled: reading {} from the credential provider failed", alias, e);
+            return null;
         }
-        return credential == null ? System.getProperty(SUPER_DIGEST) : String.valueOf(credential);
     }
 
     public static boolean isEnabled() {

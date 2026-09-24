@@ -24,6 +24,7 @@ import java.util.concurrent.TimeUnit;
 import javax.management.JMException;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.zookeeper.audit.ZKAuditProvider;
+import org.apache.zookeeper.common.SecretUtils;
 import org.apache.zookeeper.jmx.ManagedUtil;
 import org.apache.zookeeper.metrics.MetricsProvider;
 import org.apache.zookeeper.metrics.MetricsProviderLifeCycleException;
@@ -126,6 +127,7 @@ public class ZooKeeperServerMain {
         LOG.info("Starting server");
         FileTxnSnapLog txnLog = null;
         try {
+            SecretUtils.preloadCredentials();
             try {
                 metricsProvider = MetricsProviderBootstrap.startMetricsProvider(
                     config.getMetricsProviderClassName(),

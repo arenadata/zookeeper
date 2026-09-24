@@ -37,12 +37,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.commons.io.IOUtils;
 
 /**
- * A KV v2 engine and a Kerberos auth method served over HTTP by {@code com.sun.net.httpserver}.
+ * A KV v2 engine, token lookup and a Kerberos auth method served over HTTP by
+ * {@code com.sun.net.httpserver}.
  */
 public final class MockVault implements AutoCloseable {
 
     public static final String TOKEN = "s.mock-token";
     public static final String KERBEROS_LOGIN_PATH = "/v1/auth/kerberos/login";
+    public static final String LOOKUP_SELF_PATH = "/v1/auth/token/lookup-self";
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -62,11 +64,13 @@ public final class MockVault implements AutoCloseable {
     private final HttpServer server;
     private final Map<String, ObjectNode> secrets = new ConcurrentHashMap<>();
     private final Set<String> acceptedTokens = ConcurrentHashMap.newKeySet();
+    private final Set<String> deniedPaths = ConcurrentHashMap.newKeySet();
     private final List<String> loginRoles = new CopyOnWriteArrayList<>();
     private final AtomicInteger reads = new AtomicInteger();
     private final AtomicInteger failures = new AtomicInteger();
     private volatile int failureStatus;
     private volatile LoginHandler loginHandler;
+    private volatile String loginRedirect;
 
     public MockVault() throws IOException {
         server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
@@ -79,7 +83,11 @@ public final class MockVault implements AutoCloseable {
      * The provider URI of a KV path on this server, such as {@code secret/zookeeper}.
      */
     public String uri(String path) {
-        return "vault://http@localhost:" + server.getAddress().getPort() + "/" + path;
+        return "vault://http@localhost:" + port() + "/" + path;
+    }
+
+    public int port() {
+        return server.getAddress().getPort();
     }
 
     /**
@@ -106,6 +114,20 @@ public final class MockVault implements AutoCloseable {
 
     public void setLoginHandler(LoginHandler loginHandler) {
         this.loginHandler = loginHandler;
+    }
+
+    /**
+     * Answers reads of a KV v2 data path with the 403 of a policy that does not cover it.
+     */
+    public void deny(String dataPath) {
+        deniedPaths.add(dataPath);
+    }
+
+    /**
+     * Answers Kerberos logins with a 307 to the same path on another server, as a standby does.
+     */
+    public void redirectLoginTo(MockVault active) {
+        loginRedirect = "http://localhost:" + active.port() + KERBEROS_LOGIN_PATH;
     }
 
     /**
@@ -138,7 +160,19 @@ public final class MockVault implements AutoCloseable {
         }
         String path = exchange.getRequestURI().getPath();
         if (path.equals(KERBEROS_LOGIN_PATH) && exchange.getRequestMethod().equals("POST")) {
+            String redirect = loginRedirect;
+            if (redirect != null) {
+                exchange.getResponseHeaders().set("Location", redirect);
+                respond(exchange, 307, "");
+                return;
+            }
             login(exchange, body);
+            return;
+        }
+        String token = exchange.getRequestHeaders().getFirst("X-Vault-Token");
+        boolean accepted = token != null && acceptedTokens.contains(token);
+        if (path.equals(LOOKUP_SELF_PATH)) {
+            respond(exchange, accepted ? 200 : 403, accepted ? "{\"data\":{}}" : "{\"errors\":[\"permission denied\"]}");
             return;
         }
         String dataPath = path.substring("/v1/".length());
@@ -146,8 +180,7 @@ public final class MockVault implements AutoCloseable {
             respond(exchange, 404, "{\"errors\":[\"no handler for route \\\"" + dataPath + "\\\"\"]}");
             return;
         }
-        String token = exchange.getRequestHeaders().getFirst("X-Vault-Token");
-        if (token == null || !acceptedTokens.contains(token)) {
+        if (!accepted || deniedPaths.contains(dataPath)) {
             respond(exchange, 403, "{\"errors\":[\"permission denied\"]}");
             return;
         }
@@ -184,7 +217,7 @@ public final class MockVault implements AutoCloseable {
 
     private static void respond(HttpExchange exchange, int status, String body) throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
-        exchange.sendResponseHeaders(status, bytes.length);
+        exchange.sendResponseHeaders(status, bytes.length == 0 ? -1 : bytes.length);
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);
         }
