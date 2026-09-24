@@ -32,6 +32,7 @@ import javax.servlet.http.HttpServletResponse;
 import org.apache.zookeeper.common.QuorumX509Util;
 import org.apache.zookeeper.common.SecretUtils;
 import org.apache.zookeeper.common.X509Util;
+import org.apache.zookeeper.common.ZKConfig;
 import org.apache.zookeeper.server.ZooKeeperServer;
 import org.apache.zookeeper.server.auth.IPAuthenticationProvider;
 import org.eclipse.jetty.http.HttpHeader;
@@ -384,19 +385,14 @@ public class JettyAdminServer implements AdminServer {
     }
 
     /**
-     * Returns the password specified by the given property or stored in the file specified by the
-     * given path property. If both are specified, the password stored in the file will be returned.
+     * Returns the password held by the credential provider under the alias of the given property,
+     * else stored in the file specified by the given path property, else specified by the given property.
      * @param propertyName the name of the property
      * @param pathPropertyName the name of the path property
      * @return password value
      */
     private String getPasswordFromSystemPropertyOrFile(final String propertyName,
                                                        final String pathPropertyName) {
-        String value = System.getProperty(propertyName, "");
-        final String pathValue = System.getProperty(pathPropertyName, "");
-        if (!pathValue.isEmpty()) {
-            value = String.valueOf(SecretUtils.readSecret(pathValue));
-        }
-        return value;
+        return SecretUtils.getPassword(new ZKConfig(), propertyName, pathPropertyName);
     }
 }

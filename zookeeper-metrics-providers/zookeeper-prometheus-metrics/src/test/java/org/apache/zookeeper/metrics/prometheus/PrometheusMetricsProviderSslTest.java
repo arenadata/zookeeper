@@ -20,10 +20,14 @@ package org.apache.zookeeper.metrics.prometheus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import com.sun.net.httpserver.HttpServer;
 import io.prometheus.client.CollectorRegistry;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -39,6 +43,8 @@ import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.TrustManagerFactory;
+import org.apache.zookeeper.common.SecretUtils;
+import org.apache.zookeeper.common.vault.VaultCredentialProvider;
 import org.apache.zookeeper.metrics.MetricsProviderLifeCycleException;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -166,6 +172,46 @@ public class PrometheusMetricsProviderSslTest {
             assertEquals(200, fetchStatus("https://127.0.0.1:" + port + "/metrics", clientContext));
         } finally {
             provider.stop();
+        }
+    }
+
+    @Test
+    public void testPasswordsFromCredentialProvider() throws Exception {
+        HttpServer vault = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        vault.createContext("/v1/", exchange -> {
+            String path = exchange.getRequestURI().getPath();
+            String secret = path.endsWith("/metricsProvider.ssl.keyStore.password") ? PASSWORD
+                : path.endsWith("/metricsProvider.ssl.keyStore.keyPassword") ? KEY_PASSWORD : null;
+            byte[] body = (secret == null ? "{\"errors\":[]}" : "{\"data\":{\"data\":{\"value\":\"" + secret + "\"}}}")
+                    .getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(secret == null ? 404 : 200, body.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(body);
+            }
+        });
+        vault.start();
+        Path tokenFile = certDir.resolve("vault-token");
+        Files.write(tokenFile, "s.test".getBytes(StandardCharsets.UTF_8));
+        System.setProperty(SecretUtils.CREDENTIAL_PROVIDER_PATH,
+                "vault://http@127.0.0.1:" + vault.getAddress().getPort() + "/secret/zookeeper");
+        System.setProperty(VaultCredentialProvider.TOKEN_PATH, tokenFile.toString());
+        try {
+            Properties overrides = new Properties();
+            overrides.setProperty("ssl.keyStore.location", jksKeyStoreWithKeyPassword);
+            overrides.setProperty("ssl.keyStore.type", "JKS");
+            overrides.setProperty("ssl.keyStore.password", "");
+            PrometheusMetricsProvider provider = startSslProvider(false, false, overrides);
+            try {
+                SSLContext clientContext = createClientSslContext(false);
+                int port = provider.getServerPort();
+                assertEquals(200, fetchStatus("https://127.0.0.1:" + port + "/metrics", clientContext));
+            } finally {
+                provider.stop();
+            }
+        } finally {
+            System.clearProperty(SecretUtils.CREDENTIAL_PROVIDER_PATH);
+            System.clearProperty(VaultCredentialProvider.TOKEN_PATH);
+            vault.stop(0);
         }
     }
 

@@ -498,23 +498,19 @@ public abstract class X509Util implements Closeable, AutoCloseable {
     }
 
     /**
-     * Returns the password specified by the given property or from the file specified by the given path property.
-     * If both are specified, the value stored in the file will be returned.
+     * Returns the password held by the credential provider under the alias of the given property,
+     * else stored in the file specified by the given path property, else specified by the given property.
      *
      * @param config  Zookeeper configuration
      * @param propertyName  property name
      * @param pathPropertyName path property name
      * @return the password value
+     * @see SecretUtils#getPassword(ZKConfig, String, String)
      */
     public String getPasswordFromConfigPropertyOrFile(final ZKConfig config,
                                                       final String propertyName,
                                                       final String pathPropertyName) {
-        String value = config.getProperty(propertyName, "");
-        final String pathProperty = config.getProperty(pathPropertyName, "");
-        if (!pathProperty.isEmpty()) {
-            value = String.valueOf(SecretUtils.readSecret(pathProperty));
-        }
-        return value;
+        return SecretUtils.getPassword(config, propertyName, pathPropertyName);
     }
 
     /**

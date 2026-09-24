@@ -45,6 +45,7 @@ limitations under the License.
         * [Encryption, Authentication, Authorization Options](#sc_authOptions)
             * [TLS Cipher Suites](#sc_tls_cipher_suites)
         * [Delegation Token Options](#sc_delegationTokens)
+        * [Credential Provider Options](#sc_credentialProvider)
         * [Experimental Options/Features](#Experimental+Options%2FFeatures)
         * [Unsafe Options](#Unsafe+Options)
         * [Disabling data directory autocreation](#Disabling+data+directory+autocreation)
@@ -2033,6 +2034,114 @@ rejected by a follower that has not yet applied the issuing transaction.
     (Java system property: **zookeeper.tokenAuth.cleanupIntervalMs**)
     How often the leader scans the token store and cancels expired tokens.
     Default: **3600000** (1 hour)
+
+<a name="sc_credentialProvider"></a>
+
+#### Credential Provider Options
+
+Passwords that would otherwise be written to zoo.cfg can be kept in the KV v2
+secrets engine of HashiCorp Vault or OpenBao. A secret is looked up under the
+key of the property it replaces, as written in zoo.cfg (the Java system
+property without the `zookeeper.` prefix). It takes precedence over the
+property and its `passwordPath` file; a key the engine does not hold falls
+back to them. The URI and the secret layout are those of the Hadoop `vault://`
+credential provider: every key is a separate secret whose `value` field holds
+the password, so `hadoop credential create <key> -provider <uri>` or
+`bao kv put <mount>/<path>/<key> value=<password>` stores it.
+
+| Key | Password of |
+|-----|-------------|
+| ssl.keyStore.password, ssl.trustStore.password | client TLS, on servers and on clients |
+| ssl.quorum.keyStore.password, ssl.quorum.trustStore.password | quorum TLS and the AdminServer |
+| metricsProvider.ssl.keyStore.password, metricsProvider.ssl.keyStore.keyPassword, metricsProvider.ssl.trustStore.password | the Prometheus metrics endpoint |
+| SASLAuthenticationProvider.superPassword | the SASL super user |
+| DigestAuthenticationProvider.superDigest | the digest super user |
+| tokenAuth.secret | the static delegation token master key, used as UTF-8 bytes in place of *tokenAuth.secretFile* |
+
+The server reads the secrets when it starts and whenever it builds a TLS
+context again, for example after a certificate reload, so it does not start
+while the secrets engine is unreachable. A client reads its TLS passwords when
+it connects. JAAS passwords and keytabs are not read from the provider.
+
+* *credentialProvider.path* :
+    (Java system property: **zookeeper.credentialProvider.path**)
+    URI of the secrets:
+    `vault://[protocol@]host[:port]/mount[/path][?key=field]`, for example
+    `vault://https@bao.example.com:8200/secret/zookeeper`. The protocol is
+    `https` or `http` and defaults to `https`, the port defaults to 8200, and
+    `key` names the field that holds a password.
+    Default: not set, no provider
+
+* *credentialProvider.vault.authMethod* :
+    (Java system property: **zookeeper.credentialProvider.vault.authMethod**)
+    How to log in: `token` or `kerberos`. The `kerberos` login sends the
+    SPNEGO token in the Authorization header, so the Kerberos auth mount
+    must pass that header through, as for the `bao` CLI:
+    `bao auth enable -passthrough-request-headers=Authorization kerberos`,
+    or `bao auth tune -passthrough-request-headers=Authorization kerberos/`
+    for an existing mount.
+    Default: **token**
+
+* *credentialProvider.vault.tokenPath* :
+    (Java system property: **zookeeper.credentialProvider.vault.tokenPath**)
+    File that holds the Vault token. When not set, the token is read from the
+    systemd credential `vault-token` in `$CREDENTIALS_DIRECTORY`, else from
+    the `VAULT_TOKEN` environment variable. The token is read again whenever
+    Vault refuses the current one.
+
+* *credentialProvider.vault.kerberos.loginContext* :
+    (Java system property: **zookeeper.credentialProvider.vault.kerberos.loginContext**)
+    JAAS section whose principal logs in to the Kerberos auth method over
+    SPNEGO. The login is repeated whenever Vault refuses the current token.
+    Default: the server section, *zookeeper.sasl.serverconfig* or `Server`,
+    so the server keytab is reused
+
+* *credentialProvider.vault.kerberos.servicePrincipal* :
+    (Java system property: **zookeeper.credentialProvider.vault.kerberos.servicePrincipal**)
+    Service principal of Vault; `_HOST` stands for the Vault host.
+    Default: `HTTP@<Vault host>`
+
+* *credentialProvider.vault.kerberos.mountPath* :
+    (Java system property: **zookeeper.credentialProvider.vault.kerberos.mountPath**)
+    Mount path of the Kerberos auth method.
+    Default: **auth/kerberos**
+
+* *credentialProvider.vault.kerberos.role* :
+    (Java system property: **zookeeper.credentialProvider.vault.kerberos.role**)
+    Role to log in with, needed only when several roles are bound to the
+    principal.
+
+* *credentialProvider.vault.ssl.trustStore.location*, *credentialProvider.vault.ssl.trustStore.password* and *credentialProvider.vault.ssl.trustStore.type* :
+    (Java system properties: **zookeeper.credentialProvider.vault.ssl.trustStore.location**,
+    **zookeeper.credentialProvider.vault.ssl.trustStore.password** and
+    **zookeeper.credentialProvider.vault.ssl.trustStore.type**)
+    Trust store for the https connection to Vault; the JVM default trust
+    store is used when not set. Its password cannot come from the provider;
+    a PEM trust store needs none.
+
+* *credentialProvider.vault.connectTimeoutMs* and *credentialProvider.vault.readTimeoutMs* :
+    (Java system properties: **zookeeper.credentialProvider.vault.connectTimeoutMs** and
+    **zookeeper.credentialProvider.vault.readTimeoutMs**)
+    Timeouts of the requests to Vault.
+    Default: **30000**
+
+* *credentialProvider.vault.retryCount* and *credentialProvider.vault.retryIntervalMs* :
+    (Java system properties: **zookeeper.credentialProvider.vault.retryCount** and
+    **zookeeper.credentialProvider.vault.retryIntervalMs**)
+    Transport failures and 5xx or 429 answers are retried this many times
+    at this interval.
+    Default: **3** and **1000**
+
+For example, a server that logs in with its own keytab and keeps both quorum
+store passwords in OpenBao:
+
+```
+credentialProvider.path=vault://https@bao.example.com:8200/secret/zookeeper
+credentialProvider.vault.authMethod=kerberos
+credentialProvider.vault.ssl.trustStore.location=/etc/zookeeper/conf/bao-ca.pem
+ssl.quorum.keyStore.location=/etc/zookeeper/ssl/keystore.jks
+ssl.quorum.trustStore.location=/etc/zookeeper/ssl/truststore.jks
+```
 
 <a name="Experimental+Options%2FFeatures"></a>
 

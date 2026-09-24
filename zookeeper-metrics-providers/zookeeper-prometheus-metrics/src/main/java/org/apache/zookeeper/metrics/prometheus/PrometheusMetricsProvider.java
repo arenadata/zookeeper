@@ -101,6 +101,11 @@ public class PrometheusMetricsProvider implements MetricsProvider {
     static final String WORKER_SHUTDOWN_TIMEOUT_MS = "workerShutdownTimeoutMs";
 
     /**
+     * Prefix of the credential provider aliases of the passwords: the settings are named as in zoo.cfg.
+     */
+    static final String CREDENTIAL_ALIAS_PREFIX = "metricsProvider.";
+
+    /**
      * We are using the 'defaultRegistry'.
      * <p>
      * When you are running ZooKeeper (server or client) together with other
@@ -168,7 +173,8 @@ public class PrometheusMetricsProvider implements MetricsProvider {
                 throw new MetricsProviderLifeCycleException("ssl.keyStore.location is not configured");
             }
             if ((keyStorePassword == null || keyStorePassword.isEmpty())
-                    && (keyStorePasswordPath == null || keyStorePasswordPath.isEmpty())) {
+                    && (keyStorePasswordPath == null || keyStorePasswordPath.isEmpty())
+                    && !SecretUtils.hasCredentialProvider(null)) {
                 throw new MetricsProviderLifeCycleException(
                         "neither ssl.keyStore.password nor ssl.keyStore.passwordPath is configured");
             }
@@ -200,16 +206,19 @@ public class PrometheusMetricsProvider implements MetricsProvider {
             ServerConnector connector;
             if (sslEnabled) {
                 LOG.info("SSL enabled for /metrics endpoint");
-                String resolvedKeyStorePassword = resolvePassword(keyStorePassword, keyStorePasswordPath);
+                String resolvedKeyStorePassword = resolvePassword("ssl.keyStore.password", keyStorePassword,
+                        keyStorePasswordPath);
                 SslContextFactory.Server sslContextFactory = new SslContextFactory.Server();
                 KeyStore keyStore = X509Util.loadKeyStore(keyStoreLocation, resolvedKeyStorePassword, keyStoreType);
                 sslContextFactory.setKeyStore(keyStore);
                 sslContextFactory.setKeyStorePassword(resolvedKeyStorePassword);
-                if (keyStoreKeyPassword != null && !keyStoreKeyPassword.isEmpty()) {
-                    sslContextFactory.setKeyManagerPassword(keyStoreKeyPassword);
+                String resolvedKeyPassword = resolvePassword("ssl.keyStore.keyPassword", keyStoreKeyPassword, null);
+                if (resolvedKeyPassword != null && !resolvedKeyPassword.isEmpty()) {
+                    sslContextFactory.setKeyManagerPassword(resolvedKeyPassword);
                 }
                 if (trustStoreLocation != null && !trustStoreLocation.isEmpty()) {
-                    String resolvedTrustStorePassword = resolvePassword(trustStorePassword, trustStorePasswordPath);
+                    String resolvedTrustStorePassword = resolvePassword("ssl.trustStore.password", trustStorePassword,
+                            trustStorePasswordPath);
                     KeyStore trustStore = X509Util.loadTrustStore(trustStoreLocation, resolvedTrustStorePassword,
                             trustStoreType);
                     sslContextFactory.setTrustStore(trustStore);
@@ -267,10 +276,15 @@ public class PrometheusMetricsProvider implements MetricsProvider {
     }
 
     /**
-     * Returns the password stored in the file at {@code passwordPath} if configured,
-     * otherwise falls back to the plain {@code password} value.
+     * Returns the password the credential provider holds under the alias of {@code key} if any,
+     * else the one stored in the file at {@code passwordPath} if configured, else the plain
+     * {@code password} value.
      */
-    private static String resolvePassword(String password, String passwordPath) {
+    private static String resolvePassword(String key, String password, String passwordPath) throws IOException {
+        char[] credential = SecretUtils.getCredential(null, CREDENTIAL_ALIAS_PREFIX + key);
+        if (credential != null) {
+            return String.valueOf(credential);
+        }
         if (passwordPath != null && !passwordPath.isEmpty()) {
             return String.valueOf(SecretUtils.readSecret(passwordPath));
         }
