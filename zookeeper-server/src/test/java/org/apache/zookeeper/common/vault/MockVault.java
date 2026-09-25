@@ -23,6 +23,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import com.sun.net.httpserver.HttpsConfigurator;
+import com.sun.net.httpserver.HttpsServer;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetAddress;
@@ -34,10 +36,11 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import javax.net.ssl.SSLContext;
 import org.apache.commons.io.IOUtils;
 
 /**
- * A KV v2 engine, token lookup and a Kerberos auth method served over HTTP by
+ * A KV v2 engine, token lookup and a Kerberos auth method served over HTTP or HTTPS by
  * {@code com.sun.net.httpserver}.
  */
 public final class MockVault implements AutoCloseable {
@@ -62,6 +65,7 @@ public final class MockVault implements AutoCloseable {
     }
 
     private final HttpServer server;
+    private final String protocol;
     private final Map<String, ObjectNode> secrets = new ConcurrentHashMap<>();
     private final Map<String, String> rawResponses = new ConcurrentHashMap<>();
     private final List<String> requests = new CopyOnWriteArrayList<>();
@@ -76,7 +80,23 @@ public final class MockVault implements AutoCloseable {
     private volatile String loginRedirect;
 
     public MockVault() throws IOException {
-        server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        this(null);
+    }
+
+    /**
+     * Serves HTTPS with the given server context, or HTTP when it is null.
+     */
+    public MockVault(SSLContext sslContext) throws IOException {
+        InetSocketAddress address = new InetSocketAddress(InetAddress.getLoopbackAddress(), 0);
+        if (sslContext == null) {
+            server = HttpServer.create(address, 0);
+            protocol = "http";
+        } else {
+            HttpsServer httpsServer = HttpsServer.create(address, 0);
+            httpsServer.setHttpsConfigurator(new HttpsConfigurator(sslContext));
+            server = httpsServer;
+            protocol = "https";
+        }
         server.createContext("/v1/", this::handle);
         server.start();
         acceptedTokens.add(TOKEN);
@@ -86,7 +106,7 @@ public final class MockVault implements AutoCloseable {
      * The provider URI of a KV path on this server, such as {@code secret/zookeeper}.
      */
     public String uri(String path) {
-        return "vault://http@localhost:" + port() + "/" + path;
+        return "vault://" + protocol + "@localhost:" + port() + "/" + path;
     }
 
     public int port() {
@@ -137,7 +157,7 @@ public final class MockVault implements AutoCloseable {
      * Answers Kerberos logins with a 307 to the same path on another server, as a standby does.
      */
     public void redirectLoginTo(MockVault active) {
-        loginRedirect = "http://localhost:" + active.port() + KERBEROS_LOGIN_PATH;
+        loginRedirect = active.protocol + "://localhost:" + active.port() + KERBEROS_LOGIN_PATH;
     }
 
     /**

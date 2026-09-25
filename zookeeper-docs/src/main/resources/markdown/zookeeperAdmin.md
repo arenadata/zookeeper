@@ -2133,8 +2133,12 @@ a token lookup, so the token's policies must allow reading
     **zookeeper.credentialProvider.vault.ssl.trustStore.password** and
     **zookeeper.credentialProvider.vault.ssl.trustStore.type**)
     Trust store for the https connection to Vault; the JVM default trust
-    store is used when not set. Its password cannot come from the provider;
-    a PEM trust store needs none.
+    store is used when not set. Its password cannot come from the provider.
+    A PEM or JKS trust store needs none: without a password a JKS store is
+    read without its integrity check. A PKCS12 trust store written by
+    keytool needs its password, as its certificates are encrypted; keytool
+    of Java 9 and later writes PKCS12, whatever the file extension, unless
+    given `-storetype JKS`.
 
 * *credentialProvider.vault.connectTimeoutMs* and *credentialProvider.vault.readTimeoutMs* :
     (Java system properties: **zookeeper.credentialProvider.vault.connectTimeoutMs** and

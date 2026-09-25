@@ -18,11 +18,15 @@
 
 package org.apache.zookeeper.common.vault;
 
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.security.GeneralSecurityException;
 import java.security.KeyStore;
+import java.security.KeyStoreException;
 import java.util.ArrayList;
+import java.util.Enumeration;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -32,6 +36,7 @@ import java.util.function.Function;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManagerFactory;
+import org.apache.zookeeper.common.KeyStoreFileType;
 import org.apache.zookeeper.common.StringUtils;
 import org.apache.zookeeper.common.X509Util;
 import org.apache.zookeeper.server.ZooKeeperSaslServer;
@@ -174,16 +179,42 @@ public final class VaultCredentialProvider {
         }
         String password = setting(settings, TRUSTSTORE_PASSWORD);
         try {
-            KeyStore trustStore = X509Util.loadTrustStore(location, password == null ? "" : password,
-                setting(settings, TRUSTSTORE_TYPE));
+            KeyStore trustStore = loadTrustStore(location, password, setting(settings, TRUSTSTORE_TYPE));
+            // keytool writes PKCS12 by default even to a .jks file, and a PKCS12 store read without its
+            // password silently drops its encrypted certificates.
+            if (!holdsCertificate(trustStore)) {
+                throw new KeyStoreException("no certificate" + (password == null ? " readable without a password" : ""));
+            }
             TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
             tmf.init(trustStore);
             SSLContext sslContext = SSLContext.getInstance("TLS");
             sslContext.init(null, tmf.getTrustManagers(), null);
             return sslContext.getSocketFactory();
-        } catch (GeneralSecurityException | IllegalArgumentException e) {
-            throw new IOException("Failed to load the Vault trust store " + location, e);
+        } catch (IOException | GeneralSecurityException | IllegalArgumentException e) {
+            throw new IOException("Failed to load the Vault trust store " + location + ": " + e.getMessage(), e);
         }
+    }
+
+    private static KeyStore loadTrustStore(String location, String password, String type)
+        throws IOException, GeneralSecurityException {
+        if (password == null && KeyStoreFileType.fromPropertyValueOrFileName(type, location) == KeyStoreFileType.JKS) {
+            // Only a null password skips the integrity check; X509Util passes an empty one, which fails it.
+            KeyStore trustStore = KeyStore.getInstance("JKS");
+            try (InputStream in = new FileInputStream(location)) {
+                trustStore.load(in, null);
+            }
+            return trustStore;
+        }
+        return X509Util.loadTrustStore(location, password == null ? "" : password, type);
+    }
+
+    private static boolean holdsCertificate(KeyStore store) throws KeyStoreException {
+        for (Enumeration<String> aliases = store.aliases(); aliases.hasMoreElements();) {
+            if (store.getCertificate(aliases.nextElement()) != null) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String setting(Function<String, String> settings, String key) {

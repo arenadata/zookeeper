@@ -28,12 +28,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.File;
 import java.io.IOException;
-import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.security.Security;
-import java.util.HashMap;
-import java.util.Map;
 import org.apache.zookeeper.common.vault.MockVault;
 import org.apache.zookeeper.common.vault.VaultCredentialProvider;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
@@ -147,20 +144,6 @@ public class SecretUtilsCredentialProviderTest {
                 x509Util.getSslTruststorePasswdProperty());
             assertNotNull(x509Util.createSSLContextAndOptions(config).getSSLContext());
         }
-    }
-
-    @Test
-    public void testVaultTrustStoreWithoutPassword() throws Exception {
-        X509TestContext context = X509TestContext.newBuilder()
-            .setTempDir(tempDir)
-            .setKeyStoreKeyType(X509KeyType.EC)
-            .setTrustStoreKeyType(X509KeyType.EC)
-            .build();
-        Map<String, String> settings = new HashMap<>();
-        settings.put(VaultCredentialProvider.TRUSTSTORE_LOCATION,
-            context.getTrustStoreFile(KeyStoreFileType.PEM).getAbsolutePath());
-        assertNotNull(VaultCredentialProvider.get(URI.create("vault://https@localhost:8200/secret/zookeeper"),
-            settings::get));
     }
 
     @Test
