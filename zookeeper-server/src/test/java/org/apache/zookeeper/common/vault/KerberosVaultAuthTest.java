@@ -226,6 +226,22 @@ public class KerberosVaultAuthTest {
     }
 
     @Test
+    public void testLoginIsRetried() throws Exception {
+        vault.fail(503, 1);
+        assertArrayEquals("s3cret".toCharArray(), read());
+        assertEquals(1, vault.loginRoles().size());
+    }
+
+    @Test
+    public void testHostPatternIsTheInstanceOnly() {
+        assertEquals("HTTP/h.example.com@CORP_HOSTS.COM",
+            KerberosVaultAuth.replaceHost("HTTP/_HOST@CORP_HOSTS.COM", "h.example.com"));
+        assertEquals("HTTP/h.example.com", KerberosVaultAuth.replaceHost("HTTP/_HOST", "h.example.com"));
+        assertEquals("HTTP/vault@EU_HOSTING.EXAMPLE", KerberosVaultAuth.replaceHost("HTTP/vault@EU_HOSTING.EXAMPLE", "h"));
+        assertEquals("HTTP@_HOST", KerberosVaultAuth.replaceHost("HTTP@_HOST", "h"));
+    }
+
+    @Test
     public void testRefusedLoginFails() {
         vault.setLoginHandler(authorization -> null);
         IOException e = assertThrows(IOException.class, this::read);

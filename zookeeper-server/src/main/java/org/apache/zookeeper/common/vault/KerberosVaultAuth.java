@@ -59,8 +59,8 @@ final class KerberosVaultAuth implements VaultAuthMethod {
      *
      * @param connInfo the Vault server
      * @param loginContext the JAAS section to log in with
-     * @param servicePrincipal the Vault service principal; {@code _HOST} stands for the Vault host
-     *                         in lower case, null means {@code HTTP@<Vault host>}
+     * @param servicePrincipal the Vault service principal; an instance of {@code _HOST} stands for
+     *                         the Vault host in lower case, null means {@code HTTP@<Vault host>}
      * @param mountPath the mount path of the Kerberos auth method
      * @param role the role to log in with, or null to let Vault pick the one bound to the principal
      */
@@ -68,18 +68,47 @@ final class KerberosVaultAuth implements VaultAuthMethod {
                       String role) throws IOException {
         this.loginContext = loginContext;
         String host = connInfo.getHost().toLowerCase(Locale.ROOT);
-        this.servicePrincipal = servicePrincipal == null ? "HTTP@" + host : servicePrincipal.replace(HOSTNAME_PATTERN, host);
+        this.servicePrincipal = servicePrincipal == null ? "HTTP@" + host : replaceHost(servicePrincipal, host);
         String mount = VaultConnectionInfo.stripSlashes(mountPath);
         VaultConnectionInfo.checkPath(mount);
         this.loginUrl = connInfo.apiUrl(mount + "/login");
         this.role = role;
     }
 
+    /**
+     * Replaces an instance of {@code _HOST} in {@code primary/instance[@REALM]} with the host, as
+     * Hadoop does.
+     */
+    static String replaceHost(String principal, String host) {
+        int slash = principal.indexOf('/');
+        if (slash < 0) {
+            return principal;
+        }
+        int at = principal.indexOf('@', slash);
+        String instance = at < 0 ? principal.substring(slash + 1) : principal.substring(slash + 1, at);
+        if (!instance.equals(HOSTNAME_PATTERN)) {
+            return principal;
+        }
+        return principal.substring(0, slash + 1) + host + (at < 0 ? "" : principal.substring(at));
+    }
+
     @Override
     public String authenticate(VaultHttpClient client) throws IOException {
         String body = VaultHttpClient.json("role", role);
-        String response = client.retrying("Vault Kerberos login to " + loginUrl,
-            () -> client.post(loginUrl, "Negotiate " + spnegoToken(), body));
+        // One KDC login per Vault login: the JDK retries the KDCs itself, and each retry of the
+        // POST reuses the ticket.
+        LoginContext lc = login();
+        String response;
+        try {
+            response = client.retrying("Vault Kerberos login to " + loginUrl,
+                () -> client.post(loginUrl, "Negotiate " + spnegoToken(lc.getSubject()), body));
+        } finally {
+            try {
+                lc.logout();
+            } catch (LoginException e) {
+                LOG.debug("Logout of JAAS section {} failed", loginContext, e);
+            }
+        }
         JsonNode token = VaultHttpClient.parse(response, loginUrl).path("auth").path("client_token");
         if (!token.isTextual() || token.asText().isEmpty()) {
             throw new IOException("Vault login response from " + loginUrl + " has no auth.client_token");
@@ -88,24 +117,21 @@ final class KerberosVaultAuth implements VaultAuthMethod {
         return token.asText();
     }
 
-    private String spnegoToken() throws IOException {
-        LoginContext lc;
+    private LoginContext login() throws IOException {
         try {
-            lc = new LoginContext(loginContext);
+            LoginContext lc = new LoginContext(loginContext);
             lc.login();
+            return lc;
         } catch (LoginException | SecurityException e) {
             throw new IOException("Kerberos login with JAAS section " + loginContext + " failed", e);
         }
+    }
+
+    private String spnegoToken(Subject subject) throws IOException {
         try {
-            return Subject.doAs(lc.getSubject(), (PrivilegedExceptionAction<String>) this::initSecContext);
+            return Subject.doAs(subject, (PrivilegedExceptionAction<String>) this::initSecContext);
         } catch (PrivilegedActionException e) {
             throw new IOException("Failed to create a SPNEGO token for " + servicePrincipal, e.getException());
-        } finally {
-            try {
-                lc.logout();
-            } catch (LoginException e) {
-                LOG.debug("Logout of JAAS section {} failed", loginContext, e);
-            }
         }
     }
 

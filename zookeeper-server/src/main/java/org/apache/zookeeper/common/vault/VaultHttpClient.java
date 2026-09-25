@@ -47,12 +47,13 @@ final class VaultHttpClient {
     private static final Logger LOG = LoggerFactory.getLogger(VaultHttpClient.class);
 
     private static final String TOKEN_HEADER = "X-Vault-Token";
+    private static final String REQUEST_HEADER = "X-Vault-Request";
     private static final int TEMPORARY_REDIRECT = 307;
     private static final int PERMANENT_REDIRECT = 308;
     private static final int MAX_REDIRECTS = 3;
     private static final int TOO_MANY_REQUESTS = 429;
     private static final int MAX_BODY_BYTES = 1 << 20;
-    private static final int MAX_ERROR_BYTES = 1024;
+    private static final int MAX_ERROR_LENGTH = 1024;
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final VaultConnectionInfo connInfo;
@@ -168,15 +169,22 @@ final class VaultHttpClient {
 
     /**
      * Whether Vault still accepts the token. A token whose policy has no access to
-     * {@code auth/token/lookup-self} counts as refused.
+     * {@code auth/token/lookup-self} counts as refused; a busy or unreachable Vault is retried, not
+     * taken for a refusal.
      */
-    private boolean isAccepted(String token) {
-        try {
-            return get(connInfo.apiUrl("auth/token/lookup-self"), token).status == HttpURLConnection.HTTP_OK;
-        } catch (IOException e) {
-            LOG.debug("Vault token lookup failed", e);
+    private boolean isAccepted(String token) throws IOException {
+        String url = connInfo.apiUrl("auth/token/lookup-self");
+        return retrying("Vault token lookup", () -> {
+            Response response = get(url, token);
+            if (response.status == HttpURLConnection.HTTP_OK) {
+                return true;
+            }
+            RequestFailedException failure = response.failure();
+            if (failure.isTransient()) {
+                throw failure;
+            }
             return false;
-        }
+        });
     }
 
     /**
@@ -265,8 +273,10 @@ final class VaultHttpClient {
         HttpURLConnection conn = open(url, "GET");
         conn.setRequestProperty(TOKEN_HEADER, token);
         int status = conn.getResponseCode();
-        String body = status >= HttpURLConnection.HTTP_BAD_REQUEST
-            ? readErrorBody(conn.getErrorStream()) : readBody(conn.getInputStream());
+        InputStream in = status >= HttpURLConnection.HTTP_BAD_REQUEST ? conn.getErrorStream() : conn.getInputStream();
+        // A 404 is parsed: it tells a deleted version, with all its metadata, from a missing engine.
+        String body = status == HttpURLConnection.HTTP_OK || status == HttpURLConnection.HTTP_NOT_FOUND
+            ? readBody(in) : readErrorBody(in);
         return new Response(url, status, body);
     }
 
@@ -276,6 +286,7 @@ final class VaultHttpClient {
         conn.setConnectTimeout(connectTimeoutMs);
         conn.setReadTimeout(readTimeoutMs);
         conn.setUseCaches(false);
+        conn.setRequestProperty(REQUEST_HEADER, "true");
         if (sslSocketFactory != null && conn instanceof HttpsURLConnection) {
             ((HttpsURLConnection) conn).setSSLSocketFactory(sslSocketFactory);
         }
@@ -294,9 +305,11 @@ final class VaultHttpClient {
      * The start of an error answer, which goes into exception messages.
      */
     private static String readErrorBody(InputStream is) throws IOException {
-        byte[] body = readUpTo(is, MAX_ERROR_BYTES);
-        String text = new String(body, 0, Math.min(body.length, MAX_ERROR_BYTES), StandardCharsets.UTF_8);
-        return body.length > MAX_ERROR_BYTES ? text + "..." : text;
+        return abbreviate(new String(readUpTo(is, MAX_ERROR_LENGTH), StandardCharsets.UTF_8));
+    }
+
+    private static String abbreviate(String text) {
+        return text.length() > MAX_ERROR_LENGTH ? text.substring(0, MAX_ERROR_LENGTH) + "..." : text;
     }
 
     /**
@@ -374,7 +387,8 @@ final class VaultHttpClient {
         }
 
         RequestFailedException failure() {
-            return new RequestFailedException(status, "GET " + url + " failed with status " + status + ": " + body);
+            return new RequestFailedException(status,
+                "GET " + url + " failed with status " + status + ": " + abbreviate(body));
         }
     }
 

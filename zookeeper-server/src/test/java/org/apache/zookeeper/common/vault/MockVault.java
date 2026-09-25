@@ -68,12 +68,16 @@ public final class MockVault implements AutoCloseable {
     private final String protocol;
     private final Map<String, ObjectNode> secrets = new ConcurrentHashMap<>();
     private final Map<String, String> rawResponses = new ConcurrentHashMap<>();
+    private final Map<String, String> deletedVersions = new ConcurrentHashMap<>();
     private final List<String> requests = new CopyOnWriteArrayList<>();
     private final Set<String> acceptedTokens = ConcurrentHashMap.newKeySet();
     private final Set<String> deniedPaths = ConcurrentHashMap.newKeySet();
     private final List<String> loginRoles = new CopyOnWriteArrayList<>();
     private final AtomicInteger reads = new AtomicInteger();
     private final AtomicInteger failures = new AtomicInteger();
+    private final AtomicInteger lookupFailures = new AtomicInteger();
+    private final AtomicInteger requestsWithoutHeader = new AtomicInteger();
+    private volatile int lookupFailureStatus;
     private volatile int failureStatus;
     private volatile String failureBody;
     private volatile LoginHandler loginHandler;
@@ -132,6 +136,29 @@ public final class MockVault implements AutoCloseable {
      */
     public void putSecretJson(String dataPath, String field, String json) throws IOException {
         secrets.computeIfAbsent(dataPath, path -> MAPPER.createObjectNode()).set(field, MAPPER.readTree(json));
+    }
+
+    /**
+     * Answers reads of a KV v2 data path with the 404 of a deleted latest version, which carries the
+     * metadata of the secret.
+     */
+    public void putDeleted(String dataPath, String customMetadataJson) {
+        deletedVersions.put(dataPath, customMetadataJson);
+    }
+
+    /**
+     * Answers the next {@code count} token lookups with {@code status}.
+     */
+    public void failLookups(int status, int count) {
+        lookupFailureStatus = status;
+        lookupFailures.set(count);
+    }
+
+    /**
+     * The number of requests that came without an {@code X-Vault-Request} header.
+     */
+    public int requestsWithoutHeader() {
+        return requestsWithoutHeader.get();
     }
 
     public void acceptToken(String token) {
@@ -198,6 +225,9 @@ public final class MockVault implements AutoCloseable {
         String body = IOUtils.toString(exchange.getRequestBody(), StandardCharsets.UTF_8);
         String path = exchange.getRequestURI().getPath();
         requests.add(exchange.getRequestMethod() + " " + path);
+        if (!"true".equals(exchange.getRequestHeaders().getFirst("X-Vault-Request"))) {
+            requestsWithoutHeader.incrementAndGet();
+        }
         if (failures.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
             respond(exchange, failureStatus, failureBody);
             return;
@@ -215,6 +245,10 @@ public final class MockVault implements AutoCloseable {
         String token = exchange.getRequestHeaders().getFirst("X-Vault-Token");
         boolean accepted = token != null && acceptedTokens.contains(token);
         if (path.equals(LOOKUP_SELF_PATH)) {
+            if (lookupFailures.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
+                respond(exchange, lookupFailureStatus, "{\"errors\":[\"injected failure\"]}");
+                return;
+            }
             respond(exchange, accepted ? 200 : 403, accepted ? "{\"data\":{}}" : "{\"errors\":[\"permission denied\"]}");
             return;
         }
@@ -231,6 +265,13 @@ public final class MockVault implements AutoCloseable {
         String raw = rawResponses.get(dataPath);
         if (raw != null) {
             respond(exchange, 200, raw);
+            return;
+        }
+        String deleted = deletedVersions.get(dataPath);
+        if (deleted != null) {
+            respond(exchange, 404, "{\"request_id\":\"1\",\"data\":{\"data\":null,\"metadata\":{\"custom_metadata\":"
+                + deleted + ",\"deletion_time\":\"2026-01-01T00:00:00Z\",\"destroyed\":false,\"version\":2}},"
+                + "\"warnings\":null}");
             return;
         }
         ObjectNode fields = secrets.get(dataPath);

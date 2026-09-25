@@ -36,6 +36,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.security.cert.CertificateException;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import javax.net.ssl.SSLHandshakeException;
@@ -151,6 +152,37 @@ public class VaultCredentialProviderTest {
         vault.putSecretJson(DATA_PATH, "value", "{\"a\":1}");
         IOException e = assertThrows(IOException.class, () -> provider("secret/zookeeper").getCredential(ALIAS));
         assertThat(e.getMessage(), containsString("is not a string"));
+    }
+
+    @Test
+    public void testDeletedVersionIsAbsent() throws Exception {
+        StringBuilder metadata = new StringBuilder("{");
+        for (int i = 0; i < 40; i++) {
+            metadata.append(i == 0 ? "" : ",").append("\"key").append(i).append("\":\"");
+            for (int j = 0; j < 40; j++) {
+                metadata.append('v');
+            }
+            metadata.append('"');
+        }
+        vault.putDeleted(DATA_PATH, metadata.append('}').toString());
+        assertNull(provider("secret/zookeeper").getCredential(ALIAS));
+    }
+
+    @Test
+    public void testTokenLookupIsRetried() throws Exception {
+        vault.putSecret(DATA_PATH, "value", "s3cret");
+        vault.deny(DATA_PATH);
+        vault.failLookups(503, 2);
+        assertNull(provider("secret/zookeeper").getCredential(ALIAS));
+        assertEquals(Arrays.asList("GET /v1/" + DATA_PATH, "GET " + MockVault.LOOKUP_SELF_PATH,
+            "GET " + MockVault.LOOKUP_SELF_PATH, "GET " + MockVault.LOOKUP_SELF_PATH), vault.requests());
+    }
+
+    @Test
+    public void testRequestHeaderIsSent() throws Exception {
+        vault.putSecret(DATA_PATH, "value", "s3cret");
+        assertArrayEquals("s3cret".toCharArray(), provider("secret/zookeeper").getCredential(ALIAS));
+        assertEquals(0, vault.requestsWithoutHeader());
     }
 
     @Test

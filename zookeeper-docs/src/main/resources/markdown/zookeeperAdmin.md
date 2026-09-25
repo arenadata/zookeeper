@@ -2044,10 +2044,9 @@ secrets engine of HashiCorp Vault or OpenBao. A secret is looked up under the
 key of the property it replaces, as written in zoo.cfg (the Java system
 property without the `zookeeper.` prefix). It takes precedence over the
 property and its `passwordPath` file; a key the engine does not hold, or the
-token's policy does not allow to read, falls back to them. The URI and the
-secret layout are those of the Hadoop `vault://` credential provider: every key
-is a separate secret whose `value` field holds the password, so
-`hadoop credential create <key> -provider <uri>` or
+token's policy does not allow to read, falls back to them; a wrong mount or
+path, or a KV v1 engine, looks the same. Every key is a separate secret whose
+`value` field holds the password, so
 `bao kv put <mount>/<path>/<key> value=<password>` stores it. The value must be
 a JSON string, as the `bao` CLI writes it. One line end at the end of a value is
 dropped, as for `passwordPath` files, so `value=@file` stores a password file as

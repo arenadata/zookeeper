@@ -44,9 +44,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Reads credentials from a KV v2 secrets engine of HashiCorp Vault or OpenBao. The URI and the
- * secret layout are those of the Hadoop {@code vault://} credential provider, so
- * {@code hadoop credential create} writes secrets this provider reads.
+ * Reads credentials from a KV v2 secrets engine of HashiCorp Vault or OpenBao. Each alias is a
+ * separate secret whose {@code value} field, unless the URI names another, holds the credential.
  *
  * <p>A provider is shared by every lookup with the same settings and keeps each credential it has
  * read, or its absence, for the life of the process; {@link #refresh} reads one again.
