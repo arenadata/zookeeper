@@ -24,7 +24,15 @@ import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.function.Function;
+import org.apache.zookeeper.client.ZKClientConfig;
 import org.apache.zookeeper.common.vault.VaultCredentialProvider;
+import org.apache.zookeeper.server.auth.DigestAuthenticationProvider;
+import org.apache.zookeeper.server.auth.SaslServerCallbackHandler;
+import org.apache.zookeeper.server.token.DelegationTokenSecretManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -41,23 +49,6 @@ public final class SecretUtils {
     public static final String CREDENTIAL_PROVIDER_PATH = "zookeeper.credentialProvider.path";
 
     private static final String PROPERTY_PREFIX = "zookeeper.";
-
-    /**
-     * Aliases the server looks up. Reading them at startup fails the start while the provider is
-     * unreachable, and keeps later lookups, some of them on network threads, from waiting on it.
-     */
-    private static final String[] SERVER_ALIASES = {
-        "ssl.keyStore.password",
-        "ssl.trustStore.password",
-        "ssl.quorum.keyStore.password",
-        "ssl.quorum.trustStore.password",
-        "SASLAuthenticationProvider.superPassword",
-        "DigestAuthenticationProvider.superDigest",
-        "tokenAuth.secret",
-        "metricsProvider.ssl.keyStore.password",
-        "metricsProvider.ssl.keyStore.keyPassword",
-        "metricsProvider.ssl.trustStore.password",
-    };
 
     private SecretUtils() {
     }
@@ -103,12 +94,27 @@ public final class SecretUtils {
     }
 
     /**
-     * Reads the secrets the server looks up from the credential provider, if one is configured.
+     * Reads the secrets the server looks up after startup, some of them on network threads, from the
+     * credential provider, if one is configured. The start then fails while the provider is
+     * unreachable, and no later lookup waits on it.
      *
      * @throws IOException if the provider cannot be read
      */
     public static void preloadCredentials() throws IOException {
-        for (String alias : SERVER_ALIASES) {
+        if (!hasCredentialProvider(null)) {
+            return;
+        }
+        List<String> aliases = new ArrayList<>();
+        try (X509Util clientX509Util = new ClientX509Util(); X509Util quorumX509Util = new QuorumX509Util()) {
+            for (X509Util x509Util : Arrays.asList(clientX509Util, quorumX509Util)) {
+                aliases.add(aliasOf(x509Util.getSslKeystorePasswdProperty()));
+                aliases.add(aliasOf(x509Util.getSslTruststorePasswdProperty()));
+            }
+        }
+        aliases.add(aliasOf(SaslServerCallbackHandler.SYSPROP_SUPER_PASSWORD));
+        aliases.add(aliasOf(DigestAuthenticationProvider.SUPER_DIGEST_KEY));
+        aliases.add(DelegationTokenSecretManager.TOKEN_AUTH_SECRET_ALIAS);
+        for (String alias : aliases) {
             getCredential(null, alias);
         }
     }
@@ -150,8 +156,18 @@ public final class SecretUtils {
             throw new IOException("Unsupported credential provider " + path + ": only "
                 + VaultCredentialProvider.SCHEME + ":// is supported");
         }
+        Function<String, String> settings = key -> setting(config, key);
+        if (config instanceof ZKClientConfig) {
+            // a client logs in with its own JAAS section unless one is configured for Vault
+            settings = key -> {
+                String value = setting(config, key);
+                return value == null && key.equals(VaultCredentialProvider.KERBEROS_LOGIN_CONTEXT)
+                    ? config.getProperty(ZKClientConfig.LOGIN_CONTEXT_NAME_KEY, ZKClientConfig.LOGIN_CONTEXT_NAME_KEY_DEFAULT)
+                    : value;
+            };
+        }
         try {
-            return VaultCredentialProvider.get(uri, key -> setting(config, key));
+            return VaultCredentialProvider.get(uri, settings);
         } catch (NoClassDefFoundError e) {
             throw missingJackson(e);
         }
@@ -195,14 +211,7 @@ public final class SecretUtils {
 
     private static String setting(ZKConfig config, String key) {
         String value = config == null ? null : config.getProperty(key);
-        if (value == null) {
-            value = System.getProperty(key);
-        }
-        if (value == null) {
-            return null;
-        }
-        value = value.trim();
-        return value.isEmpty() ? null : value;
+        return StringUtils.trimToNull(value == null ? System.getProperty(key) : value);
     }
 
     public static char[] readSecret(final String pathToFile) {

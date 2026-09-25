@@ -64,6 +64,18 @@ public class VaultConnectionInfoTest {
     }
 
     @Test
+    public void testHostWithUnderscore() throws Exception {
+        VaultConnectionInfo info = new VaultConnectionInfo(URI.create("vault://http@open_bao:18200/secret"));
+        assertEquals("http://open_bao:18200", info.baseUrl());
+        assertEquals("open_bao", info.getHost());
+    }
+
+    @Test
+    public void testIpv6HostWithDefaultPort() throws Exception {
+        assertEquals("https://[::1]:8200", new VaultConnectionInfo(URI.create("vault://https@[::1]/secret")).baseUrl());
+    }
+
+    @Test
     public void testApiUrlEncodesSegments() throws Exception {
         VaultConnectionInfo info = new VaultConnectionInfo(URI.create("vault://localhost:8200/secret/zk"));
         assertEquals("https://localhost:8200/v1/secret/data/zk/a%20b%3Fc/d.e_f~g-h",
@@ -79,6 +91,10 @@ public class VaultConnectionInfoTest {
         "vault://localhost:8200/",
         "vault://localhost:8200/secret//zk",
         "vault://localhost:8200/secret/../zk",
+        "vault://localhost:0/secret",
+        "vault://localhost:70000/secret",
+        "vault://localhost:port/secret",
+        "vault://https@:8200/secret",
     })
     public void testInvalidUri(String uri) {
         assertThrows(IOException.class, () -> new VaultConnectionInfo(URI.create(uri)));

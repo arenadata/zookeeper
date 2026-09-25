@@ -31,6 +31,7 @@ import java.util.Locale;
 final class VaultConnectionInfo {
 
     static final int DEFAULT_PORT = 8200;
+    private static final int MAX_PORT = 65535;
     static final String DEFAULT_PROTOCOL = "https";
     static final String DEFAULT_FIELD = "value";
 
@@ -47,16 +48,28 @@ final class VaultConnectionInfo {
         if (!VaultCredentialProvider.SCHEME.equalsIgnoreCase(uri.getScheme())) {
             throw new IOException("Not a Vault URI: " + uri);
         }
-        String userInfo = uri.getUserInfo();
-        protocol = userInfo == null || userInfo.isEmpty() ? DEFAULT_PROTOCOL : userInfo.toLowerCase(Locale.ROOT);
+        // Parsed by hand: java.net.URI drops the host of an authority it cannot parse, such as one with '_'.
+        String authority = uri.getRawAuthority();
+        if (authority == null || authority.isEmpty()) {
+            throw new IOException("Invalid Vault URI: missing host in " + uri);
+        }
+        int at = authority.indexOf('@');
+        String userInfo = at < 0 ? "" : authority.substring(0, at);
+        protocol = userInfo.isEmpty() ? DEFAULT_PROTOCOL : userInfo.toLowerCase(Locale.ROOT);
         if (!protocol.equals("https") && !protocol.equals("http")) {
             throw new IOException("Invalid Vault URI: protocol must be http or https in " + uri);
         }
-        host = uri.getHost();
-        if (host == null || host.isEmpty()) {
+        String hostPort = authority.substring(at + 1);
+        int portSeparator = hostPort.lastIndexOf(':');
+        if (hostPort.startsWith("[")) {
+            int close = hostPort.indexOf(']');
+            portSeparator = close < 0 ? -1 : hostPort.indexOf(':', close);
+        }
+        host = portSeparator < 0 ? hostPort : hostPort.substring(0, portSeparator);
+        if (host.isEmpty()) {
             throw new IOException("Invalid Vault URI: missing host in " + uri);
         }
-        port = uri.getPort() > 0 ? uri.getPort() : DEFAULT_PORT;
+        port = portSeparator < 0 ? DEFAULT_PORT : parsePort(hostPort.substring(portSeparator + 1), uri);
 
         String path = stripSlashes(uri.getPath());
         if (path.isEmpty()) {
@@ -78,6 +91,19 @@ final class VaultConnectionInfo {
             }
         }
         field = key == null || key.isEmpty() ? DEFAULT_FIELD : key;
+    }
+
+    private static int parsePort(String port, URI uri) throws IOException {
+        int value;
+        try {
+            value = Integer.parseInt(port);
+        } catch (NumberFormatException e) {
+            value = -1;
+        }
+        if (value < 1 || value > MAX_PORT) {
+            throw new IOException("Invalid Vault URI: bad port '" + port + "' in " + uri);
+        }
+        return value;
     }
 
     /**

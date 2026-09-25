@@ -63,12 +63,15 @@ public final class MockVault implements AutoCloseable {
 
     private final HttpServer server;
     private final Map<String, ObjectNode> secrets = new ConcurrentHashMap<>();
+    private final Map<String, String> rawResponses = new ConcurrentHashMap<>();
+    private final List<String> requests = new CopyOnWriteArrayList<>();
     private final Set<String> acceptedTokens = ConcurrentHashMap.newKeySet();
     private final Set<String> deniedPaths = ConcurrentHashMap.newKeySet();
     private final List<String> loginRoles = new CopyOnWriteArrayList<>();
     private final AtomicInteger reads = new AtomicInteger();
     private final AtomicInteger failures = new AtomicInteger();
     private volatile int failureStatus;
+    private volatile String failureBody;
     private volatile LoginHandler loginHandler;
     private volatile String loginRedirect;
 
@@ -95,6 +98,13 @@ public final class MockVault implements AutoCloseable {
      */
     public void putSecret(String dataPath, String field, String value) {
         secrets.computeIfAbsent(dataPath, path -> MAPPER.createObjectNode()).put(field, value);
+    }
+
+    /**
+     * Answers reads of a KV v2 data path with 200 and the given body.
+     */
+    public void putRaw(String dataPath, String body) {
+        rawResponses.put(dataPath, body);
     }
 
     /**
@@ -134,8 +144,20 @@ public final class MockVault implements AutoCloseable {
      * Answers the next {@code count} requests with {@code status}.
      */
     public void fail(int status, int count) {
+        fail(status, count, "{\"errors\":[\"injected failure\"]}");
+    }
+
+    public void fail(int status, int count, String body) {
         failureStatus = status;
+        failureBody = body;
         failures.set(count);
+    }
+
+    /**
+     * Every request received, as method and path.
+     */
+    public List<String> requests() {
+        return requests;
     }
 
     /**
@@ -154,11 +176,12 @@ public final class MockVault implements AutoCloseable {
 
     private void handle(HttpExchange exchange) throws IOException {
         String body = IOUtils.toString(exchange.getRequestBody(), StandardCharsets.UTF_8);
+        String path = exchange.getRequestURI().getPath();
+        requests.add(exchange.getRequestMethod() + " " + path);
         if (failures.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
-            respond(exchange, failureStatus, "{\"errors\":[\"injected failure\"]}");
+            respond(exchange, failureStatus, failureBody);
             return;
         }
-        String path = exchange.getRequestURI().getPath();
         if (path.equals(KERBEROS_LOGIN_PATH) && exchange.getRequestMethod().equals("POST")) {
             String redirect = loginRedirect;
             if (redirect != null) {
@@ -185,6 +208,11 @@ public final class MockVault implements AutoCloseable {
             return;
         }
         reads.incrementAndGet();
+        String raw = rawResponses.get(dataPath);
+        if (raw != null) {
+            respond(exchange, 200, raw);
+            return;
+        }
         ObjectNode fields = secrets.get(dataPath);
         if (fields == null) {
             respond(exchange, 404, "{\"errors\":[]}");

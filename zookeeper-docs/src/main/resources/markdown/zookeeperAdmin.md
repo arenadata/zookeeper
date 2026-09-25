@@ -2048,9 +2048,10 @@ token's policy does not allow to read, falls back to them. The URI and the
 secret layout are those of the Hadoop `vault://` credential provider: every key
 is a separate secret whose `value` field holds the password, so
 `hadoop credential create <key> -provider <uri>` or
-`bao kv put <mount>/<path>/<key> value=<password>` stores it. One line end at
-the end of a value is dropped, as for `passwordPath` files, so
-`value=@file` stores a password file as it is.
+`bao kv put <mount>/<path>/<key> value=<password>` stores it. The value must be
+a JSON string, as the `bao` CLI writes it. One line end at the end of a value is
+dropped, as for `passwordPath` files, so `value=@file` stores a password file as
+it is.
 
 | Key | Password of |
 |-----|-------------|
@@ -2059,12 +2060,13 @@ the end of a value is dropped, as for `passwordPath` files, so
 | metricsProvider.ssl.keyStore.password, metricsProvider.ssl.keyStore.keyPassword, metricsProvider.ssl.trustStore.password | the Prometheus metrics endpoint |
 | SASLAuthenticationProvider.superPassword | the SASL super user |
 | DigestAuthenticationProvider.superDigest | the digest super user |
-| tokenAuth.secret | the static delegation token master key, used as UTF-8 bytes in place of *tokenAuth.secretFile* |
+| tokenAuth.secret | the static delegation token master key, used as UTF-8 bytes in place of *tokenAuth.secretFile*; a binary key file has no such text form, so moving it to the provider means a new key, which ends the tokens signed with the old one |
 
 The server reads all of these keys when it starts, so it does not start while
 the secrets engine is unreachable, and keeps them in memory. A certificate
 reload reads the TLS store passwords again and keeps the old ones if the engine
-cannot be reached; the other keys change on restart. A client reads its TLS
+cannot be reached, after the retries of every request; the other keys change on
+restart. A client reads its TLS
 passwords on its first connection and keeps them; it needs jackson-databind on
 its classpath, which the server distribution ships. JAAS passwords and keytabs
 are not read from the provider.
@@ -2097,17 +2099,19 @@ a token lookup, so the token's policies must allow reading
 
 * *credentialProvider.vault.tokenPath* :
     (Java system property: **zookeeper.credentialProvider.vault.tokenPath**)
-    File that holds the Vault token; an empty file is an error. When not set,
-    the token is read from the systemd credential `vault-token` in
-    `$CREDENTIALS_DIRECTORY`, else from the `VAULT_TOKEN` environment variable.
-    The token is read again whenever Vault refuses the current one.
+    File that holds the Vault token; an empty file is an error, a byte order
+    mark at its start is ignored. When not set, the token is read from the
+    systemd credential `vault-token` in `$CREDENTIALS_DIRECTORY`, else from
+    the `VAULT_TOKEN` environment variable. The token is read again whenever
+    Vault refuses the current one.
 
 * *credentialProvider.vault.kerberos.loginContext* :
     (Java system property: **zookeeper.credentialProvider.vault.kerberos.loginContext**)
     JAAS section whose principal logs in to the Kerberos auth method over
     SPNEGO. The login is repeated whenever Vault refuses the current token.
-    Default: the server section, *zookeeper.sasl.serverconfig* or `Server`,
-    so the server keytab is reused
+    Default: on a server its own section, *zookeeper.sasl.serverconfig* or
+    `Server`, so the server keytab is reused; on a client its client section,
+    *zookeeper.sasl.clientconfig* or `Client`
 
 * *credentialProvider.vault.kerberos.servicePrincipal* :
     (Java system property: **zookeeper.credentialProvider.vault.kerberos.servicePrincipal**)

@@ -75,6 +75,19 @@ public class StringUtils {
     }
 
     /**
+     * Returns the string without leading and trailing whitespace, or null if nothing is left.
+     * @param s the string, may be null
+     * @return the trimmed string, or null
+     */
+    public static String trimToNull(String s) {
+        if (s == null) {
+            return null;
+        }
+        String trimmed = s.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /**
      * <p>Checks if a String is empty ("") or null.</p>
      *
      * <pre>

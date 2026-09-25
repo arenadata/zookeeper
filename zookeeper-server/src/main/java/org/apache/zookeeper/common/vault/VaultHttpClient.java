@@ -21,6 +21,8 @@ package org.apache.zookeeper.common.vault;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.io.ByteArrayOutputStream;
+import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -32,7 +34,6 @@ import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLSocketFactory;
-import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -50,6 +51,8 @@ final class VaultHttpClient {
     private static final int PERMANENT_REDIRECT = 308;
     private static final int MAX_REDIRECTS = 3;
     private static final int TOO_MANY_REQUESTS = 429;
+    private static final int MAX_BODY_BYTES = 1 << 20;
+    private static final int MAX_ERROR_BYTES = 1024;
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final VaultConnectionInfo connInfo;
@@ -80,7 +83,8 @@ final class VaultHttpClient {
      * @param field the field within the secret
      * @return the field, or null when the secret, its current version or the field does not exist,
      *         or when the policy of the token denies reading it
-     * @throws IOException if the request fails or the field is not a scalar
+     * @throws IOException if the request fails, the answer is not a KV v2 secret or the field is
+     *         not a string
      */
     String readField(String dataPath, String field) throws IOException {
         String url = connInfo.apiUrl(dataPath);
@@ -89,15 +93,19 @@ final class VaultHttpClient {
             checkAbsent(response);
             return null;
         }
-        if (response.status == HttpURLConnection.HTTP_UNAUTHORIZED || response.status == HttpURLConnection.HTTP_FORBIDDEN) {
+        if (isRefusal(response.status)) {
             LOG.info("The Vault policy denies reading {}; treating it as absent", dataPath);
             return null;
         }
-        JsonNode value = parse(response.body, url).path("data").path("data").path(field);
+        JsonNode data = parse(response.body, url).path("data").path("data");
+        if (!data.isObject()) {
+            throw new IOException("Vault response from " + url + " holds no KV v2 secret");
+        }
+        JsonNode value = data.path(field);
         if (value.isMissingNode() || value.isNull()) {
             return null;
         }
-        if (!value.isValueNode()) {
+        if (!value.isTextual()) {
             throw new IOException("Field " + field + " of " + dataPath + " is not a string");
         }
         return value.asText();
@@ -124,54 +132,38 @@ final class VaultHttpClient {
 
     private Response execute(String url) throws IOException {
         String action = "Vault request GET " + url;
-        boolean reauthenticated = false;
-        IOException lastFailure = null;
-        int attempt = 0;
-        while (true) {
-            String token = clientToken;
-            if (token == null) {
-                token = login(null);
-            }
-            Response response = null;
-            try {
-                response = get(url, token);
-            } catch (IOException e) {
-                if (!isTransient(e)) {
-                    throw e;
-                }
-                lastFailure = e;
-                LOG.warn("{} failed (attempt {}/{}): {}", action, attempt + 1, retryCount + 1, e.getMessage());
-            }
-            if (response != null) {
-                int status = response.status;
-                if (status == HttpURLConnection.HTTP_OK || status == HttpURLConnection.HTTP_NOT_FOUND) {
-                    return response;
-                }
-                if (status == HttpURLConnection.HTTP_UNAUTHORIZED || status == HttpURLConnection.HTTP_FORBIDDEN) {
-                    if (isAccepted(token)) {
-                        return response;
-                    }
-                    if (reauthenticated) {
-                        throw response.failure();
-                    }
-                    reauthenticated = true;
-                    LOG.debug("{} answered {} and the token is no longer valid, logging in again", action, status);
-                    login(token);
-                    continue;
-                }
-                RequestFailedException failure = response.failure();
-                if (!failure.isTransient()) {
-                    throw failure;
-                }
-                lastFailure = failure;
-                LOG.warn("{} failed (attempt {}/{}): {}", action, attempt + 1, retryCount + 1, failure.getMessage());
-            }
-            if (attempt >= retryCount) {
-                throw new IOException(action + " failed after " + (attempt + 1) + " attempts", lastFailure);
-            }
-            attempt++;
-            sleep(retryIntervalMs);
+        String token = clientToken;
+        if (token == null) {
+            token = login(null);
         }
+        Response response = read(action, url, token);
+        if (isRefusal(response.status) && !isAccepted(token)) {
+            LOG.debug("{} answered {} and the token is no longer valid, logging in again", action, response.status);
+            String renewed = login(token);
+            response = read(action, url, renewed);
+            if (isRefusal(response.status) && !isAccepted(renewed)) {
+                throw response.failure();
+            }
+        }
+        return response;
+    }
+
+    /**
+     * GETs with retries; an answer other than 200, 404, 401 or 403 is a failure.
+     */
+    private Response read(String action, String url, String token) throws IOException {
+        return retrying(action, () -> {
+            Response response = get(url, token);
+            int status = response.status;
+            if (status == HttpURLConnection.HTTP_OK || status == HttpURLConnection.HTTP_NOT_FOUND || isRefusal(status)) {
+                return response;
+            }
+            throw response.failure();
+        });
+    }
+
+    private static boolean isRefusal(int status) {
+        return status == HttpURLConnection.HTTP_UNAUTHORIZED || status == HttpURLConnection.HTTP_FORBIDDEN;
     }
 
     /**
@@ -255,7 +247,7 @@ final class VaultHttpClient {
             String location = conn.getHeaderField("Location");
             if ((status == TEMPORARY_REDIRECT || status == PERMANENT_REDIRECT) && location != null
                 && redirects < MAX_REDIRECTS) {
-                readBody(conn.getInputStream());
+                readErrorBody(conn.getInputStream());
                 URL next = new URL(target, location);
                 if (!next.getProtocol().equals(target.getProtocol())) {
                     throw new IOException("POST " + target + " was redirected to " + next + " over another protocol");
@@ -265,7 +257,7 @@ final class VaultHttpClient {
                 continue;
             }
             throw new RequestFailedException(status,
-                "POST " + target + " failed with status " + status + ": " + readBody(conn.getErrorStream()));
+                "POST " + target + " failed with status " + status + ": " + readErrorBody(conn.getErrorStream()));
         }
     }
 
@@ -273,7 +265,8 @@ final class VaultHttpClient {
         HttpURLConnection conn = open(url, "GET");
         conn.setRequestProperty(TOKEN_HEADER, token);
         int status = conn.getResponseCode();
-        String body = readBody(status >= HttpURLConnection.HTTP_BAD_REQUEST ? conn.getErrorStream() : conn.getInputStream());
+        String body = status >= HttpURLConnection.HTTP_BAD_REQUEST
+            ? readErrorBody(conn.getErrorStream()) : readBody(conn.getInputStream());
         return new Response(url, status, body);
     }
 
@@ -290,12 +283,37 @@ final class VaultHttpClient {
     }
 
     private static String readBody(InputStream is) throws IOException {
-        if (is == null) {
-            return "";
+        byte[] body = readUpTo(is, MAX_BODY_BYTES);
+        if (body.length > MAX_BODY_BYTES) {
+            throw new IOException("Vault response is longer than " + MAX_BODY_BYTES + " bytes");
         }
-        try (InputStream in = is) {
-            return IOUtils.toString(in, StandardCharsets.UTF_8);
+        return new String(body, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * The start of an error answer, which goes into exception messages.
+     */
+    private static String readErrorBody(InputStream is) throws IOException {
+        byte[] body = readUpTo(is, MAX_ERROR_BYTES);
+        String text = new String(body, 0, Math.min(body.length, MAX_ERROR_BYTES), StandardCharsets.UTF_8);
+        return body.length > MAX_ERROR_BYTES ? text + "..." : text;
+    }
+
+    /**
+     * Reads a stream until it ends or holds more than limit bytes.
+     */
+    private static byte[] readUpTo(InputStream is, int limit) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        if (is != null) {
+            try (InputStream in = is) {
+                byte[] buffer = new byte[4096];
+                int n;
+                while (out.size() <= limit && (n = in.read(buffer)) > 0) {
+                    out.write(buffer, 0, n);
+                }
+            }
         }
+        return out.toByteArray();
     }
 
     static JsonNode parse(String body, String url) throws IOException {
@@ -307,23 +325,31 @@ final class VaultHttpClient {
     }
 
     /**
-     * A JSON object of alternating keys and values; null values are left out.
+     * A JSON object with one field, empty when the value is null.
      */
-    static String json(String... keyValues) {
+    static String json(String key, String value) {
         ObjectNode node = MAPPER.createObjectNode();
-        for (int i = 0; i + 1 < keyValues.length; i += 2) {
-            if (keyValues[i + 1] != null) {
-                node.put(keyValues[i], keyValues[i + 1]);
-            }
+        if (value != null) {
+            node.put(key, value);
         }
         return node.toString();
     }
 
-    private static boolean isTransient(IOException e) {
-        return e instanceof SocketException
-            || e instanceof SocketTimeoutException
-            || e instanceof UnknownHostException
-            || (e instanceof RequestFailedException && ((RequestFailedException) e).isTransient());
+    /**
+     * Whether a later attempt may succeed: the server answered that it is busy or down, or a
+     * connection failed, also under a TLS handshake or a Kerberos login.
+     */
+    static boolean isTransient(IOException e) {
+        if (e instanceof RequestFailedException) {
+            return ((RequestFailedException) e).isTransient();
+        }
+        for (Throwable cause = e; cause != null; cause = cause.getCause()) {
+            if (cause instanceof SocketException || cause instanceof SocketTimeoutException
+                || cause instanceof UnknownHostException || cause instanceof EOFException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void sleep(long ms) throws IOException {
@@ -363,10 +389,6 @@ final class VaultHttpClient {
         RequestFailedException(int status, String message) {
             super(message);
             this.status = status;
-        }
-
-        int getStatus() {
-            return status;
         }
 
         /**

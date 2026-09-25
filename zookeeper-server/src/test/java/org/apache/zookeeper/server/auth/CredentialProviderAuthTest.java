@@ -47,8 +47,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 public class CredentialProviderAuthTest {
 
-    private static final String SUPER_DIGEST = "zookeeper.DigestAuthenticationProvider.superDigest";
-    private static final String SUPER_PASSWORD = "zookeeper.SASLAuthenticationProvider.superPassword";
+    private static final String SUPER_DIGEST = DigestAuthenticationProvider.SUPER_DIGEST_KEY;
+    private static final String SUPER_PASSWORD = SaslServerCallbackHandler.SYSPROP_SUPER_PASSWORD;
     private static final Id SUPER = new Id("super", "");
 
     @TempDir

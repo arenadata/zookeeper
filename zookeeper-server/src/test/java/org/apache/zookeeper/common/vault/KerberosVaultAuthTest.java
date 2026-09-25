@@ -23,6 +23,7 @@ import static org.hamcrest.Matchers.containsString;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
@@ -37,6 +38,8 @@ import javax.security.auth.Subject;
 import javax.security.auth.login.Configuration;
 import javax.security.auth.login.LoginContext;
 import org.apache.zookeeper.Environment;
+import org.apache.zookeeper.client.ZKClientConfig;
+import org.apache.zookeeper.common.SecretUtils;
 import org.apache.zookeeper.server.quorum.auth.MiniKdc;
 import org.ietf.jgss.GSSContext;
 import org.ietf.jgss.GSSCredential;
@@ -231,9 +234,28 @@ public class KerberosVaultAuthTest {
     }
 
     @Test
-    public void testMountPath() throws Exception {
+    public void testMountPath() {
         settings.put(VaultCredentialProvider.KERBEROS_MOUNT_PATH, "/auth/krb/");
         assertThrows(IOException.class, this::read);
-        assertEquals(0, vault.loginRoles().size());
+        assertTrue(vault.requests().contains("POST /v1/auth/krb/login"), vault.requests().toString());
+    }
+
+    private ZKClientConfig clientConfig() {
+        ZKClientConfig config = new ZKClientConfig();
+        config.setProperty(SecretUtils.CREDENTIAL_PROVIDER_PATH, vault.uri("secret/zookeeper"));
+        config.setProperty(VaultCredentialProvider.AUTH_METHOD, VaultCredentialProvider.AUTH_METHOD_KERBEROS);
+        config.setProperty(VaultCredentialProvider.KERBEROS_SERVICE_PRINCIPAL, "HTTP/_HOST@" + kdc.getRealm());
+        return config;
+    }
+
+    @Test
+    public void testClientLogsInWithItsJaasSection() throws Exception {
+        ZKClientConfig config = clientConfig();
+        config.setProperty(ZKClientConfig.LOGIN_CONTEXT_NAME_KEY, "VaultClient");
+        assertArrayEquals("s3cret".toCharArray(), SecretUtils.getCredential(config, "ssl.quorum.keyStore.password"));
+
+        IOException e = assertThrows(IOException.class,
+            () -> SecretUtils.getCredential(clientConfig(), "ssl.quorum.keyStore.password"));
+        assertThat(e.getMessage() + e.getCause(), containsString("JAAS section Client"));
     }
 }

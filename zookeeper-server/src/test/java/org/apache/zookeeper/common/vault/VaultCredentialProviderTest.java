@@ -22,17 +22,24 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import java.io.EOFException;
 import java.io.File;
 import java.io.IOException;
+import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.security.cert.CertificateException;
 import java.util.HashMap;
 import java.util.Map;
+import javax.net.ssl.SSLHandshakeException;
+import javax.security.auth.login.LoginException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -96,9 +103,47 @@ public class VaultCredentialProviderTest {
     }
 
     @Test
-    public void testScalarFieldIsText() throws Exception {
-        vault.putSecretJson(DATA_PATH, "value", "12345");
-        assertArrayEquals("12345".toCharArray(), provider("secret/zookeeper").getCredential(ALIAS));
+    public void testNumberFieldIsRejected() throws Exception {
+        vault.putSecretJson(DATA_PATH, "value", "12345678.5");
+        IOException e = assertThrows(IOException.class, () -> provider("secret/zookeeper").getCredential(ALIAS));
+        assertThat(e.getMessage(), containsString("is not a string"));
+    }
+
+    @Test
+    public void testAnswerWithoutSecretIsAnError() {
+        vault.putRaw(DATA_PATH, "");
+        vault.putRaw(TRUSTSTORE_DATA_PATH, "{\"data\":{\"value\":\"kv1\"}}");
+        IOException e = assertThrows(IOException.class, () -> provider("secret/zookeeper").getCredential(ALIAS));
+        assertThat(e.getMessage(), containsString("holds no KV v2 secret"));
+        e = assertThrows(IOException.class, () -> provider("secret/zookeeper").getCredential(TRUSTSTORE_ALIAS));
+        assertThat(e.getMessage(), containsString("holds no KV v2 secret"));
+    }
+
+    @Test
+    public void testLongErrorAnswerIsCut() {
+        StringBuilder page = new StringBuilder();
+        for (int i = 0; i < 1000; i++) {
+            page.append("<p>error page</p>");
+        }
+        vault.fail(400, 1, page.toString());
+        IOException e = assertThrows(IOException.class, () -> provider("secret/zookeeper").getCredential(ALIAS));
+        assertTrue(e.getMessage().length() < 2000, e.getMessage());
+    }
+
+    @Test
+    public void testTransientFailures() {
+        SSLHandshakeException closedHandshake = new SSLHandshakeException("Remote host terminated the handshake");
+        closedHandshake.initCause(new EOFException());
+        SSLHandshakeException untrusted = new SSLHandshakeException("PKIX path building failed");
+        untrusted.initCause(new CertificateException());
+        LoginException kdcDown = new LoginException("Cannot contact any KDC");
+        kdcDown.initCause(new SocketTimeoutException());
+
+        assertTrue(VaultHttpClient.isTransient(new SocketTimeoutException()));
+        assertTrue(VaultHttpClient.isTransient(closedHandshake));
+        assertTrue(VaultHttpClient.isTransient(new IOException("Kerberos login failed", kdcDown)));
+        assertFalse(VaultHttpClient.isTransient(untrusted));
+        assertFalse(VaultHttpClient.isTransient(new IOException("Kerberos login failed", new LoginException("no section"))));
     }
 
     @Test
@@ -262,6 +307,18 @@ public class VaultCredentialProviderTest {
         assertEquals("s.systemd", new TokenVaultAuth(null, env::get).resolveToken());
 
         assertEquals(MockVault.TOKEN, new TokenVaultAuth(tokenFile.getAbsolutePath(), env::get).resolveToken());
+    }
+
+    @Test
+    public void testByteOrderMarkIsDropped() throws Exception {
+        Files.write(tokenFile.toPath(), "\uFEFFs.bom\n".getBytes(StandardCharsets.UTF_8));
+        assertEquals("s.bom", new TokenVaultAuth(tokenFile.getAbsolutePath(), key -> null).resolveToken());
+    }
+
+    @Test
+    public void testNonAsciiTokenIsRejected() throws Exception {
+        writeToken("s.t\u00f6ken");
+        assertThrows(IOException.class, () -> new TokenVaultAuth(tokenFile.getAbsolutePath(), key -> null).resolveToken());
     }
 
     @Test

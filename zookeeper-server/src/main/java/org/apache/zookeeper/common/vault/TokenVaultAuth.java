@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.function.Function;
+import org.apache.zookeeper.common.StringUtils;
 
 /**
  * A Vault token read from the file named by {@link VaultCredentialProvider#TOKEN_PATH}; without
@@ -72,7 +73,7 @@ final class TokenVaultAuth implements VaultAuthMethod {
                 }
             }
             if (token == null) {
-                token = trimToNull(env.apply(VAULT_TOKEN_ENV));
+                token = StringUtils.trimToNull(env.apply(VAULT_TOKEN_ENV));
             }
         }
         if (token != null) {
@@ -81,27 +82,23 @@ final class TokenVaultAuth implements VaultAuthMethod {
         return token;
     }
 
+    /**
+     * Reads a token file, dropping the byte order mark some editors write.
+     */
     private static String readToken(File file) throws IOException {
-        return trimToNull(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
-    }
-
-    private static String trimToNull(String value) {
-        if (value == null) {
-            return null;
-        }
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
+        String content = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+        return StringUtils.trimToNull(content.startsWith("\uFEFF") ? content.substring(1) : content);
     }
 
     /**
-     * The token travels in an HTTP header, which rejects whitespace and control characters with
-     * an exception that quotes the value; reject them first, without quoting it.
+     * Vault tokens are printable ASCII. Anything else would reach Vault as a different token, or be
+     * rejected by the HTTP header code with an exception that quotes the value.
      */
     static void checkToken(String token) throws IOException {
         for (int i = 0; i < token.length(); i++) {
             char c = token.charAt(i);
-            if (c <= ' ' || c == 0x7f) {
-                throw new IOException("Vault token contains whitespace or control characters");
+            if (c <= ' ' || c >= 0x7f) {
+                throw new IOException("Vault token contains whitespace or characters other than printable ASCII");
             }
         }
     }

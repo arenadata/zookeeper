@@ -55,7 +55,7 @@ public class DigestAuthenticationProvider implements AuthenticationProvider {
 
     private static final String DIGEST_AUTH_ENABLED = "zookeeper.DigestAuthenticationProvider.enabled";
 
-    private static final String SUPER_DIGEST = "zookeeper.DigestAuthenticationProvider.superDigest";
+    public static final String SUPER_DIGEST_KEY = "zookeeper.DigestAuthenticationProvider.superDigest";
 
     /** specify a command line property with key of
      * "zookeeper.DigestAuthenticationProvider.superDigest"
@@ -69,10 +69,10 @@ public class DigestAuthenticationProvider implements AuthenticationProvider {
      * Fails closed: when the credential provider cannot be read, no digest grants super access.
      */
     private static String resolveSuperDigest() {
-        String alias = SecretUtils.aliasOf(SUPER_DIGEST);
+        String alias = SecretUtils.aliasOf(SUPER_DIGEST_KEY);
         try {
             char[] credential = SecretUtils.getCredential(null, alias);
-            return credential == null ? System.getProperty(SUPER_DIGEST) : String.valueOf(credential);
+            return credential == null ? System.getProperty(SUPER_DIGEST_KEY) : String.valueOf(credential);
         } catch (IOException e) {
             LOG.error("Super user digest disabled: reading {} from the credential provider failed", alias, e);
             return null;

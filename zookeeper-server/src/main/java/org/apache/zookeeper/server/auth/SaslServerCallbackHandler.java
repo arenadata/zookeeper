@@ -41,7 +41,7 @@ import org.slf4j.LoggerFactory;
 public class SaslServerCallbackHandler implements CallbackHandler {
 
     private static final Logger LOG = LoggerFactory.getLogger(SaslServerCallbackHandler.class);
-    private static final String SYSPROP_SUPER_PASSWORD = "zookeeper.SASLAuthenticationProvider.superPassword";
+    public static final String SYSPROP_SUPER_PASSWORD = "zookeeper.SASLAuthenticationProvider.superPassword";
     private static final String SYSPROP_REMOVE_HOST = "zookeeper.kerberos.removeHostFromPrincipal";
     private static final String SYSPROP_REMOVE_REALM = "zookeeper.kerberos.removeRealmFromPrincipal";
 

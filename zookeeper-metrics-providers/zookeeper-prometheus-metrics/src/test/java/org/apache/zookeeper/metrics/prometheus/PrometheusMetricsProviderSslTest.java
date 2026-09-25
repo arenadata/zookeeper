@@ -21,14 +21,10 @@ package org.apache.zookeeper.metrics.prometheus;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import com.sun.net.httpserver.HttpServer;
 import io.prometheus.client.CollectorRegistry;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -48,6 +44,7 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.TrustManagerFactory;
 import org.apache.zookeeper.common.SecretUtils;
+import org.apache.zookeeper.common.vault.MockVault;
 import org.apache.zookeeper.common.vault.VaultCredentialProvider;
 import org.apache.zookeeper.metrics.MetricsProviderLifeCycleException;
 import org.junit.jupiter.api.BeforeAll;
@@ -190,29 +187,18 @@ public class PrometheusMetricsProviderSslTest {
      * Serves the given secrets of secret/zookeeper, by alias, as the credential provider while the body runs.
      */
     private static void withVault(Map<String, String> secrets, VaultBody body) throws Exception {
-        HttpServer vault = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
-        vault.createContext("/v1/", exchange -> {
-            String path = exchange.getRequestURI().getPath();
-            String secret = secrets.get(path.substring(path.lastIndexOf('/') + 1));
-            String json = secret == null ? "{\"errors\":[]}" : "{\"data\":{\"data\":{\"value\":\"" + secret + "\"}}}";
-            byte[] response = json.getBytes(StandardCharsets.UTF_8);
-            exchange.sendResponseHeaders(secret == null ? 404 : 200, response.length);
-            try (OutputStream os = exchange.getResponseBody()) {
-                os.write(response);
+        try (MockVault vault = new MockVault()) {
+            secrets.forEach((alias, secret) -> vault.putSecret("secret/data/zookeeper/" + alias, "value", secret));
+            Path tokenFile = certDir.resolve("vault-token");
+            Files.write(tokenFile, MockVault.TOKEN.getBytes(StandardCharsets.UTF_8));
+            System.setProperty(SecretUtils.CREDENTIAL_PROVIDER_PATH, vault.uri("secret/zookeeper"));
+            System.setProperty(VaultCredentialProvider.TOKEN_PATH, tokenFile.toString());
+            try {
+                body.run();
+            } finally {
+                System.clearProperty(SecretUtils.CREDENTIAL_PROVIDER_PATH);
+                System.clearProperty(VaultCredentialProvider.TOKEN_PATH);
             }
-        });
-        vault.start();
-        Path tokenFile = certDir.resolve("vault-token");
-        Files.write(tokenFile, "s.test".getBytes(StandardCharsets.UTF_8));
-        System.setProperty(SecretUtils.CREDENTIAL_PROVIDER_PATH,
-                "vault://http@127.0.0.1:" + vault.getAddress().getPort() + "/secret/zookeeper");
-        System.setProperty(VaultCredentialProvider.TOKEN_PATH, tokenFile.toString());
-        try {
-            body.run();
-        } finally {
-            System.clearProperty(SecretUtils.CREDENTIAL_PROVIDER_PATH);
-            System.clearProperty(VaultCredentialProvider.TOKEN_PATH);
-            vault.stop(0);
         }
     }
 

@@ -69,4 +69,11 @@ public class StringUtilTest extends ZKTestCase {
             StringUtils.joinStrings(Arrays.asList("a", "B", null, "d"), ","));
     }
 
+    @Test
+    public void testTrimToNull() {
+        assertNull(StringUtils.trimToNull(null));
+        assertNull(StringUtils.trimToNull(" \t\n"));
+        assertEquals("a b", StringUtils.trimToNull(" a b\n"));
+    }
+
 }

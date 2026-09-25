@@ -32,6 +32,7 @@ import java.util.function.Function;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManagerFactory;
+import org.apache.zookeeper.common.StringUtils;
 import org.apache.zookeeper.common.X509Util;
 import org.apache.zookeeper.server.ZooKeeperSaslServer;
 import org.slf4j.Logger;
@@ -96,9 +97,7 @@ public final class VaultCredentialProvider {
     /**
      * Returns the provider of a URI, created on first use.
      *
-     * @param uri the provider URI
      * @param settings the value of a configuration property, null when it is not set
-     * @return the provider
      * @throws IOException if the URI or the settings are invalid
      */
     public static VaultCredentialProvider get(URI uri, Function<String, String> settings) throws IOException {
@@ -188,12 +187,7 @@ public final class VaultCredentialProvider {
     }
 
     private static String setting(Function<String, String> settings, String key) {
-        String value = settings.apply(key);
-        if (value == null) {
-            return null;
-        }
-        value = value.trim();
-        return value.isEmpty() ? null : value;
+        return StringUtils.trimToNull(settings.apply(key));
     }
 
     private static int number(Function<String, String> settings, String key, int defaultValue, int min)
