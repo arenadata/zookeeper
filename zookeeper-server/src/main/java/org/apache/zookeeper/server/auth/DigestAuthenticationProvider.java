@@ -19,6 +19,7 @@
 package org.apache.zookeeper.server.auth;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
+import java.io.IOException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -26,6 +27,7 @@ import java.util.Collections;
 import java.util.List;
 import javax.servlet.http.HttpServletRequest;
 import org.apache.zookeeper.KeeperException;
+import org.apache.zookeeper.common.SecretUtils;
 import org.apache.zookeeper.data.Id;
 import org.apache.zookeeper.server.ServerCnxn;
 import org.slf4j.Logger;
@@ -53,12 +55,29 @@ public class DigestAuthenticationProvider implements AuthenticationProvider {
 
     private static final String DIGEST_AUTH_ENABLED = "zookeeper.DigestAuthenticationProvider.enabled";
 
+    public static final String SUPER_DIGEST_KEY = "zookeeper.DigestAuthenticationProvider.superDigest";
+
     /** specify a command line property with key of
      * "zookeeper.DigestAuthenticationProvider.superDigest"
      * and value of "super:&lt;base64encoded(SHA1(password))&gt;" to enable
-     * super user access (i.e. acls disabled)
+     * super user access (i.e. acls disabled); a credential provider entry
+     * under its alias takes precedence
      */
-    private static final String superDigest = System.getProperty("zookeeper.DigestAuthenticationProvider.superDigest");
+    private final String superDigest = resolveSuperDigest();
+
+    /**
+     * Fails closed: when the credential provider cannot be read, no digest grants super access.
+     */
+    private static String resolveSuperDigest() {
+        String alias = SecretUtils.aliasOf(SUPER_DIGEST_KEY);
+        try {
+            char[] credential = SecretUtils.getCredential(null, alias);
+            return credential == null ? System.getProperty(SUPER_DIGEST_KEY) : String.valueOf(credential);
+        } catch (IOException e) {
+            LOG.error("Super user digest disabled: reading {} from the credential provider failed", alias, e);
+            return null;
+        }
+    }
 
     public static boolean isEnabled() {
         boolean enabled = Boolean.parseBoolean(System.getProperty(DIGEST_AUTH_ENABLED, "true"));

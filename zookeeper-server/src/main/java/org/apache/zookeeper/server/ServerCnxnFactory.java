@@ -275,11 +275,12 @@ public abstract class ServerCnxnFactory {
         // jaas.conf entry available
         try {
             Map<String, String> credentials = getDigestMd5Credentials(entries);
+            char[] superPassword = SaslServerCallbackHandler.superPasswordFromCredentialProvider();
             DelegationTokenSecretManager tokenSecretManager = DelegationTokenSecretManager.createIfEnabled();
             DelegationTokenStore.EntryReader tokenStore = tokenSecretManager == null ? null : this::readTokenStoreEntry;
             DelegationTokenStore.KeyReader keyStore = tokenSecretManager == null ? null : this::readTokenKeyEntry;
             Supplier<CallbackHandler> callbackHandlerSupplier = () -> {
-                return new SaslServerCallbackHandler(credentials, tokenSecretManager, tokenStore, keyStore);
+                return new SaslServerCallbackHandler(credentials, superPassword, tokenSecretManager, tokenStore, keyStore);
             };
             login = new Login(serverSection, callbackHandlerSupplier, new ZKConfig());
             setLoginUser(login.getUserName());

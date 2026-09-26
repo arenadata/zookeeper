@@ -32,6 +32,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import javax.security.sasl.SaslException;
+import org.apache.zookeeper.common.SecretUtils;
+import org.apache.zookeeper.common.vault.MockVault;
+import org.apache.zookeeper.common.vault.VaultCredentialProvider;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -116,6 +119,74 @@ public class DelegationTokenSecretManagerTest {
         byte[] identifier = new DelegationTokenIdentifier("alice", "yarn", "", 1L, 2L, 3, 4).toBytes();
         assertArrayEquals(new DelegationTokenSecretManager(KEY).computePassword(identifier),
             manager.computePassword(identifier));
+    }
+
+    private MockVault startVault() throws IOException {
+        MockVault vault = new MockVault();
+        Path tokenFile = tmpDir.resolve("vault-token");
+        Files.write(tokenFile, MockVault.TOKEN.getBytes(StandardCharsets.UTF_8));
+        System.setProperty(SecretUtils.CREDENTIAL_PROVIDER_PATH, vault.uri("secret/zookeeper"));
+        System.setProperty(VaultCredentialProvider.TOKEN_PATH, tokenFile.toString());
+        System.setProperty(VaultCredentialProvider.RETRY_INTERVAL_MS, "1");
+        return vault;
+    }
+
+    private static void stopVault(MockVault vault) {
+        System.clearProperty(SecretUtils.CREDENTIAL_PROVIDER_PATH);
+        System.clearProperty(VaultCredentialProvider.TOKEN_PATH);
+        System.clearProperty(VaultCredentialProvider.RETRY_INTERVAL_MS);
+        vault.close();
+    }
+
+    @Test
+    public void testCreateIfEnabledPrefersCredentialProvider() throws IOException {
+        Path secretFile = tmpDir.resolve("master.key");
+        Files.write(secretFile, "fedcba9876543210fedcba9876543210".getBytes(StandardCharsets.UTF_8));
+        System.setProperty(DelegationTokenSecretManager.TOKEN_AUTH_ENABLED, "true");
+        System.setProperty(DelegationTokenSecretManager.TOKEN_AUTH_SECRET_FILE, secretFile.toString());
+        MockVault vault = startVault();
+        try {
+            vault.putSecret("secret/data/zookeeper/" + DelegationTokenSecretManager.TOKEN_AUTH_SECRET_ALIAS, "value",
+                " 0123456789abcdef0123456789abcdef\n");
+            DelegationTokenSecretManager manager = DelegationTokenSecretManager.createIfEnabled();
+            assertNotNull(manager);
+            byte[] identifier = new DelegationTokenIdentifier("alice", "yarn", "", 1L, 2L, 3, 4).toBytes();
+            assertArrayEquals(new DelegationTokenSecretManager(KEY).computePassword(identifier),
+                manager.computePassword(identifier));
+        } finally {
+            stopVault(vault);
+        }
+    }
+
+    @Test
+    public void testCreateIfEnabledFallsBackToSecretFile() throws IOException {
+        Path secretFile = tmpDir.resolve("master.key");
+        Files.write(secretFile, KEY);
+        System.setProperty(DelegationTokenSecretManager.TOKEN_AUTH_ENABLED, "true");
+        System.setProperty(DelegationTokenSecretManager.TOKEN_AUTH_SECRET_FILE, secretFile.toString());
+        MockVault vault = startVault();
+        try {
+            DelegationTokenSecretManager manager = DelegationTokenSecretManager.createIfEnabled();
+            byte[] identifier = new DelegationTokenIdentifier("alice", "yarn", "", 1L, 2L, 3, 4).toBytes();
+            assertArrayEquals(new DelegationTokenSecretManager(KEY).computePassword(identifier),
+                manager.computePassword(identifier));
+        } finally {
+            stopVault(vault);
+        }
+    }
+
+    @Test
+    public void testShortSecretFromCredentialProviderFails() throws IOException {
+        System.setProperty(DelegationTokenSecretManager.TOKEN_AUTH_ENABLED, "true");
+        MockVault vault = startVault();
+        try {
+            vault.putSecret("secret/data/zookeeper/" + DelegationTokenSecretManager.TOKEN_AUTH_SECRET_ALIAS, "value",
+                "weak");
+            IOException e = assertThrows(IOException.class, DelegationTokenSecretManager::createIfEnabled);
+            assertTrue(e.getMessage().contains(DelegationTokenSecretManager.TOKEN_AUTH_SECRET_ALIAS));
+        } finally {
+            stopVault(vault);
+        }
     }
 
     @Test

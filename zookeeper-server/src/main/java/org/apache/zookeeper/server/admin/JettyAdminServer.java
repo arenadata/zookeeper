@@ -30,8 +30,8 @@ import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import org.apache.zookeeper.common.QuorumX509Util;
-import org.apache.zookeeper.common.SecretUtils;
 import org.apache.zookeeper.common.X509Util;
+import org.apache.zookeeper.common.ZKConfig;
 import org.apache.zookeeper.server.ZooKeeperServer;
 import org.apache.zookeeper.server.auth.IPAuthenticationProvider;
 import org.eclipse.jetty.http.HttpHeader;
@@ -124,15 +124,16 @@ public class JettyAdminServer implements AdminServer {
             config.addCustomizer(customizer);
 
             try (QuorumX509Util x509Util = new QuorumX509Util()) {
+                ZKConfig zkConfig = new ZKConfig();
                 String privateKeyType = System.getProperty(x509Util.getSslKeystoreTypeProperty(), "");
                 String privateKeyPath = System.getProperty(x509Util.getSslKeystoreLocationProperty(), "");
-                String privateKeyPassword = getPasswordFromSystemPropertyOrFile(
+                String privateKeyPassword = x509Util.getPasswordFromConfigPropertyOrFile(zkConfig,
                         x509Util.getSslKeystorePasswdProperty(),
                         x509Util.getSslKeystorePasswdPathProperty());
 
                 String certAuthType = System.getProperty(x509Util.getSslTruststoreTypeProperty(), "");
                 String certAuthPath = System.getProperty(x509Util.getSslTruststoreLocationProperty(), "");
-                String certAuthPassword = getPasswordFromSystemPropertyOrFile(
+                String certAuthPassword = x509Util.getPasswordFromConfigPropertyOrFile(zkConfig,
                         x509Util.getSslTruststorePasswdProperty(),
                         x509Util.getSslTruststorePasswdPathProperty());
                 KeyStore keyStore = null, trustStore = null;
@@ -381,22 +382,5 @@ public class JettyAdminServer implements AdminServer {
         securityHandler.setConstraintMappings(new ConstraintMapping[] {cmt});
 
         ctxHandler.setSecurityHandler(securityHandler);
-    }
-
-    /**
-     * Returns the password specified by the given property or stored in the file specified by the
-     * given path property. If both are specified, the password stored in the file will be returned.
-     * @param propertyName the name of the property
-     * @param pathPropertyName the name of the path property
-     * @return password value
-     */
-    private String getPasswordFromSystemPropertyOrFile(final String propertyName,
-                                                       final String pathPropertyName) {
-        String value = System.getProperty(propertyName, "");
-        final String pathValue = System.getProperty(pathPropertyName, "");
-        if (!pathValue.isEmpty()) {
-            value = String.valueOf(SecretUtils.readSecret(pathValue));
-        }
-        return value;
     }
 }

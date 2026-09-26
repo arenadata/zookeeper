@@ -30,6 +30,7 @@ import javax.security.auth.callback.UnsupportedCallbackException;
 import javax.security.sasl.AuthorizeCallback;
 import javax.security.sasl.RealmCallback;
 import javax.security.sasl.SaslException;
+import org.apache.zookeeper.common.SecretUtils;
 import org.apache.zookeeper.common.Time;
 import org.apache.zookeeper.server.token.DelegationTokenIdentifier;
 import org.apache.zookeeper.server.token.DelegationTokenSecretManager;
@@ -40,12 +41,13 @@ import org.slf4j.LoggerFactory;
 public class SaslServerCallbackHandler implements CallbackHandler {
 
     private static final Logger LOG = LoggerFactory.getLogger(SaslServerCallbackHandler.class);
-    private static final String SYSPROP_SUPER_PASSWORD = "zookeeper.SASLAuthenticationProvider.superPassword";
+    public static final String SYSPROP_SUPER_PASSWORD = "zookeeper.SASLAuthenticationProvider.superPassword";
     private static final String SYSPROP_REMOVE_HOST = "zookeeper.kerberos.removeHostFromPrincipal";
     private static final String SYSPROP_REMOVE_REALM = "zookeeper.kerberos.removeRealmFromPrincipal";
 
     private String userName;
     private final Map<String, String> credentials;
+    private final char[] superPassword;
     private final DelegationTokenSecretManager tokenManager;
     private final DelegationTokenStore.EntryReader tokenStore;
     private final DelegationTokenStore.KeyReader keyStore;
@@ -63,7 +65,27 @@ public class SaslServerCallbackHandler implements CallbackHandler {
         DelegationTokenSecretManager tokenManager,
         DelegationTokenStore.EntryReader tokenStore,
         DelegationTokenStore.KeyReader keyStore) {
+        this(credentials, null, tokenManager, tokenStore, keyStore);
+    }
+
+    /**
+     * Creates a handler for the given users.
+     *
+     * @param credentials the passwords of the users, by name
+     * @param superPassword the password of the super user, or null to read it from
+     *                      {@code zookeeper.SASLAuthenticationProvider.superPassword} at each login
+     * @param tokenManager the delegation token manager, or null when token authentication is off
+     * @param tokenStore the reader of delegation token entries
+     * @param keyStore the reader of rotated delegation token keys
+     */
+    public SaslServerCallbackHandler(
+        Map<String, String> credentials,
+        char[] superPassword,
+        DelegationTokenSecretManager tokenManager,
+        DelegationTokenStore.EntryReader tokenStore,
+        DelegationTokenStore.KeyReader keyStore) {
         this.credentials = credentials;
+        this.superPassword = superPassword;
         this.tokenManager = tokenManager;
         this.tokenStore = tokenStore;
         this.keyStore = keyStore;
@@ -205,14 +227,32 @@ public class SaslServerCallbackHandler implements CallbackHandler {
                 ? tokenManager.computePassword(tokenIdentifierBytes)
                 : DelegationTokenSecretManager.computePassword(tokenSigningKey, tokenIdentifierBytes);
             pc.setPassword(Base64.getEncoder().encodeToString(password).toCharArray());
-        } else if ("super".equals(this.userName) && System.getProperty(SYSPROP_SUPER_PASSWORD) != null) {
-            // superuser: use Java system property for password, if available.
-            pc.setPassword(System.getProperty(SYSPROP_SUPER_PASSWORD).toCharArray());
+        } else if ("super".equals(this.userName) && superPassword() != null) {
+            // superuser: use the credential provider or the Java system property for password, if available.
+            pc.setPassword(superPassword());
         } else if (credentials.containsKey(userName)) {
             pc.setPassword(credentials.get(userName).toCharArray());
         } else {
             LOG.warn("No password found for user: {}", userName);
         }
+    }
+
+    private char[] superPassword() {
+        if (superPassword != null) {
+            return superPassword;
+        }
+        String value = System.getProperty(SYSPROP_SUPER_PASSWORD);
+        return value == null ? null : value.toCharArray();
+    }
+
+    /**
+     * Returns the password of the super user the credential provider holds.
+     *
+     * @return the password, or null when no credential provider is configured or it holds none
+     * @throws IOException if the credential provider cannot be read
+     */
+    public static char[] superPasswordFromCredentialProvider() throws IOException {
+        return SecretUtils.getCredential(null, SecretUtils.aliasOf(SYSPROP_SUPER_PASSWORD));
     }
 
     private void handleRealmCallback(RealmCallback rc) {

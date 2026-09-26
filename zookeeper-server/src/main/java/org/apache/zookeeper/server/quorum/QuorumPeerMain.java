@@ -23,6 +23,7 @@ import javax.management.JMException;
 import javax.security.sasl.SaslException;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.zookeeper.audit.ZKAuditProvider;
+import org.apache.zookeeper.common.SecretUtils;
 import org.apache.zookeeper.jmx.ManagedUtil;
 import org.apache.zookeeper.metrics.MetricsProvider;
 import org.apache.zookeeper.metrics.MetricsProviderLifeCycleException;
@@ -150,6 +151,7 @@ public class QuorumPeerMain {
         }
 
         LOG.info("Starting quorum peer, myid=" + config.getServerId());
+        SecretUtils.preloadCredentials();
         final MetricsProvider metricsProvider;
         try {
             metricsProvider = MetricsProviderBootstrap.startMetricsProvider(

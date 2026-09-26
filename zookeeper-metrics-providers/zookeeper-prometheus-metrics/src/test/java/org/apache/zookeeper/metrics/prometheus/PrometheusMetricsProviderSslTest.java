@@ -20,6 +20,7 @@ package org.apache.zookeeper.metrics.prometheus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.prometheus.client.CollectorRegistry;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -32,13 +33,19 @@ import java.nio.file.Paths;
 import java.security.KeyStore;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.TrustManagerFactory;
+import org.apache.zookeeper.common.SecretUtils;
+import org.apache.zookeeper.common.vault.MockVault;
+import org.apache.zookeeper.common.vault.VaultCredentialProvider;
 import org.apache.zookeeper.metrics.MetricsProviderLifeCycleException;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -167,6 +174,72 @@ public class PrometheusMetricsProviderSslTest {
         } finally {
             provider.stop();
         }
+    }
+
+    /**
+     * Code that runs while a fake KV v2 engine serves the credential provider.
+     */
+    private interface VaultBody {
+        void run() throws Exception;
+    }
+
+    /**
+     * Serves the given secrets of secret/zookeeper, by alias, as the credential provider while the body runs.
+     */
+    private static void withVault(Map<String, String> secrets, VaultBody body) throws Exception {
+        try (MockVault vault = new MockVault()) {
+            secrets.forEach((alias, secret) -> vault.putSecret("secret/data/zookeeper/" + alias, "value", secret));
+            Path tokenFile = certDir.resolve("vault-token");
+            Files.write(tokenFile, MockVault.TOKEN.getBytes(StandardCharsets.UTF_8));
+            System.setProperty(SecretUtils.CREDENTIAL_PROVIDER_PATH, vault.uri("secret/zookeeper"));
+            System.setProperty(VaultCredentialProvider.TOKEN_PATH, tokenFile.toString());
+            try {
+                body.run();
+            } finally {
+                System.clearProperty(SecretUtils.CREDENTIAL_PROVIDER_PATH);
+                System.clearProperty(VaultCredentialProvider.TOKEN_PATH);
+            }
+        }
+    }
+
+    @Test
+    public void testPasswordsFromCredentialProvider() throws Exception {
+        Map<String, String> secrets = new HashMap<>();
+        secrets.put("metricsProvider.ssl.keyStore.password", PASSWORD);
+        secrets.put("metricsProvider.ssl.keyStore.keyPassword", KEY_PASSWORD);
+        withVault(secrets, () -> {
+            Properties overrides = new Properties();
+            overrides.setProperty("ssl.keyStore.location", jksKeyStoreWithKeyPassword);
+            overrides.setProperty("ssl.keyStore.type", "JKS");
+            overrides.setProperty("ssl.keyStore.password", "");
+            PrometheusMetricsProvider provider = startSslProvider(false, false, overrides);
+            try {
+                SSLContext clientContext = createClientSslContext(false);
+                int port = provider.getServerPort();
+                assertEquals(200, fetchStatus("https://127.0.0.1:" + port + "/metrics", clientContext));
+            } finally {
+                provider.stop();
+            }
+        });
+    }
+
+    @Test
+    public void testKeystorePasswordMissingEverywhere() throws Exception {
+        withVault(Collections.emptyMap(), () -> {
+            CollectorRegistry.defaultRegistry.clear();
+            PrometheusMetricsProvider provider = new PrometheusMetricsProvider();
+            Properties configuration = new Properties();
+            configuration.setProperty("httpHost", "127.0.0.1");
+            configuration.setProperty("httpPort", "0");
+            configuration.setProperty("exportJvmInfo", "false");
+            configuration.setProperty("ssl.enabled", "true");
+            configuration.setProperty("ssl.keyStore.location", serverKeyStore);
+            configuration.setProperty("ssl.keyStore.type", "PKCS12");
+            provider.configure(configuration);
+            MetricsProviderLifeCycleException e =
+                    assertThrows(MetricsProviderLifeCycleException.class, provider::start);
+            assertTrue(e.getMessage().contains("holds no metricsProvider.ssl.keyStore.password"), e.getMessage());
+        });
     }
 
     @Test
