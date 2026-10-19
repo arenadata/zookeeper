@@ -121,11 +121,11 @@ public class RestCfg {
     * instance of {@code _HOST} replaced by the local host name.
     */
    public String getSpnegoPrincipal() {
-       return resolveHostPattern(cfg.getProperty("rest.spnego.principal"));
+       return resolveHostPattern(trimmed("rest.spnego.principal"));
    }
 
    public String getSpnegoKeytab() {
-       return cfg.getProperty("rest.spnego.keytab");
+       return trimmed("rest.spnego.keytab");
    }
 
    /**
@@ -134,11 +134,11 @@ public class RestCfg {
     * name.
     */
    public String getZkPrincipal() {
-       return resolveHostPattern(cfg.getProperty("rest.zk.principal"));
+       return resolveHostPattern(trimmed("rest.zk.principal"));
    }
 
    public String getZkKeytab() {
-       return cfg.getProperty("rest.zk.keytab");
+       return trimmed("rest.zk.keytab");
    }
 
    /**
@@ -156,8 +156,8 @@ public class RestCfg {
 
    private static void checkKeytabPair(String principalKey, String keytabKey,
            String principal, String keytab, List<String> errors) {
-       boolean hasPrincipal = principal != null && !principal.trim().isEmpty();
-       boolean hasKeytab = keytab != null && !keytab.trim().isEmpty();
+       boolean hasPrincipal = principal != null;
+       boolean hasKeytab = keytab != null;
 
        if (hasPrincipal && !hasKeytab) {
            errors.add(keytabKey + " is required when " + principalKey
@@ -165,9 +165,18 @@ public class RestCfg {
        } else if (hasKeytab && !hasPrincipal) {
            errors.add(principalKey + " is required when " + keytabKey
                    + " is set");
-       } else if (hasKeytab && !new File(keytab.trim()).canRead()) {
-           errors.add("keytab file " + keytab + " is not readable");
+       } else if (hasKeytab && !new File(keytab).isFile()) {
+           errors.add("keytab file " + keytab + " is not a readable file");
        }
+   }
+
+   private String trimmed(String key) {
+       String value = cfg.getProperty(key);
+       if (value == null) {
+           return null;
+       }
+       value = value.trim();
+       return value.isEmpty() ? null : value;
    }
 
    private static String resolveHostPattern(String principal) {

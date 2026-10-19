@@ -186,7 +186,38 @@ public class HttpAuthFilterTest {
     }
 
     @Test
-    public void testNegotiateWithoutSpnegoConfiguredFallsBackToBasic() throws Exception {
+    public void testUnestablishedTokenWithoutResponseTokenIsRefused() throws Exception {
+        when(spnego.accept(any())).thenReturn(
+                new SpnegoAcceptor.Result(false, null, null));
+        givenAuthorization("Negotiate "
+                + Base64.getEncoder().encodeToString(new byte[] {9, 9}));
+        run();
+        verify(response).sendError(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(response).addHeader(HttpAuthFilter.CHALLENGE_HEADER, "Negotiate");
+        verify(chain, never()).doFilter(any(), any());
+    }
+
+    @Test
+    public void testLowercaseNegotiateSchemeIsAccepted() throws Exception {
+        when(spnego.accept(any())).thenReturn(
+                new SpnegoAcceptor.Result(true, "client@REALM", null));
+        givenAuthorization("negotiate "
+                + Base64.getEncoder().encodeToString(new byte[] {9, 9}));
+        run();
+        verify(chain).doFilter(request, response);
+        assertEquals("client@REALM", authenticatedUser());
+    }
+
+    @Test
+    public void testLowercaseBasicSchemeIsAccepted() throws Exception {
+        givenAuthorization("basic "
+                + Base64.getEncoder().encodeToString("probe:secret".getBytes()));
+        run();
+        verify(chain).doFilter(request, response);
+    }
+
+    @Test
+    public void testNegotiateWithoutSpnegoConfiguredIsRefused() throws Exception {
         filter = new HttpAuthFilter(null, credentials);
         givenAuthorization("Negotiate "
                 + Base64.getEncoder().encodeToString(new byte[] {9, 9}));

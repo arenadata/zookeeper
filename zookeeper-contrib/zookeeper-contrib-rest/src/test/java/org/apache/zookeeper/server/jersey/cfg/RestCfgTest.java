@@ -117,4 +117,30 @@ public class RestCfgTest {
                 + "rest.spnego.keytab=" + keytab.getAbsolutePath() + "\n");
         assertEquals(0, cfg.kerberosConfigErrors().size());
     }
+
+    @Test
+    public void testBlankValuesAreTreatedAsAbsent() throws IOException {
+        RestCfg cfg = cfg("rest.spnego.principal=  \n"
+                + "rest.zk.keytab=  \n");
+        assertNull(cfg.getSpnegoPrincipal());
+        assertNull(cfg.getZkKeytab());
+        assertEquals(0, cfg.kerberosConfigErrors().size());
+    }
+
+    @Test
+    public void testKeytabValueIsTrimmed(@TempDir File tempDir) throws IOException {
+        File keytab = Files.createFile(new File(tempDir, "rest.keytab").toPath()).toFile();
+        RestCfg cfg = cfg("rest.spnego.principal=HTTP/host@REALM\n"
+                + "rest.spnego.keytab=" + keytab.getAbsolutePath() + "  \n");
+        assertEquals(keytab.getAbsolutePath(), cfg.getSpnegoKeytab());
+        assertEquals(0, cfg.kerberosConfigErrors().size());
+    }
+
+    @Test
+    public void testDirectoryKeytabIsAnError(@TempDir File tempDir) throws IOException {
+        RestCfg cfg = cfg("rest.spnego.principal=HTTP/host@REALM\n"
+                + "rest.spnego.keytab=" + tempDir.getAbsolutePath() + "\n");
+        List<String> errors = cfg.kerberosConfigErrors();
+        assertEquals(1, errors.size());
+    }
 }

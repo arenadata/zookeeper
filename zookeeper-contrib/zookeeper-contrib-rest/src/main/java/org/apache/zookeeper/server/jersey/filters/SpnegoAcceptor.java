@@ -40,9 +40,11 @@ import org.slf4j.LoggerFactory;
 
 /**
  * SPNEGO acceptor for the service principal of the gateway. Logs in from a
- * keytab once and validates one Negotiate token per {@link #accept(byte[])}
+ * keytab and validates one Negotiate token per {@link #accept(byte[])}
  * call; a Kerberos token always establishes the context in a single leg, so
- * no state is kept between calls.
+ * no state is kept between calls. A failed accept re-logs in from the
+ * keytab once per cooldown window and retries, so a rotated service key
+ * recovers without a restart.
  */
 public class SpnegoAcceptor {
 
@@ -53,15 +55,42 @@ public class SpnegoAcceptor {
     private static final String KRB5_MECH_OID = "1.2.840.113554.1.2.2";
     private static final String KRB5_PRINCIPAL_NAME_OID = "1.2.840.113554.1.2.2.1";
 
-    private final Subject subject;
-    private final GSSCredential acceptorCredential;
+    private final String principal;
+    private final String keytab;
 
-    SpnegoAcceptor(Subject subject, GSSCredential acceptorCredential) {
-        this.subject = subject;
-        this.acceptorCredential = acceptorCredential;
+    private volatile Login current;
+    private volatile long lastReloginAt;
+
+    /** How often a failing accept may trigger a keytab re-login. */
+    long reloginCooldownMs = 30000;
+
+    /** Subject and acceptor credential of one keytab login. */
+    static final class Login {
+
+        final Subject subject;
+        final GSSCredential credential;
+
+        Login(Subject subject, GSSCredential credential) {
+            this.subject = subject;
+            this.credential = credential;
+        }
+    }
+
+    SpnegoAcceptor(String principal, String keytab, Login initial) {
+        this.principal = principal;
+        this.keytab = keytab;
+        this.current = initial;
     }
 
     public static SpnegoAcceptor create(String principal, String keytab) throws IOException {
+        SpnegoAcceptor acceptor = new SpnegoAcceptor(principal, keytab, null);
+        acceptor.current = acceptor.doLogin();
+        LOG.info("SPNEGO acceptor ready for principal {}", principal);
+        return acceptor;
+    }
+
+    /** Performs one keytab login as the service principal. */
+    Login doLogin() throws IOException {
         try {
             LoginContext login = new LoginContext("zk-rest-spnego", null, null,
                     keytabConfiguration(principal, keytab));
@@ -74,8 +103,7 @@ public class SpnegoAcceptor {
                             GSSCredential.INDEFINITE_LIFETIME,
                             new Oid[] {new Oid(SPNEGO_MECH_OID), new Oid(KRB5_MECH_OID)},
                             GSSCredential.ACCEPT_ONLY));
-            LOG.info("SPNEGO acceptor ready for principal {}", principal);
-            return new SpnegoAcceptor(subject, credential);
+            return new Login(subject, credential);
         } catch (LoginException | PrivilegedActionException e) {
             throw new IOException("SPNEGO acceptor login as " + principal
                     + " from keytab " + keytab + " failed", e);
@@ -110,9 +138,21 @@ public class SpnegoAcceptor {
      */
     public Result accept(byte[] token) throws GSSException {
         try {
-            return Subject.doAs(subject, (PrivilegedExceptionAction<Result>) () -> {
+            return accept(current, token);
+        } catch (GSSException failure) {
+            if (!reloginAfterFailure()) {
+                throw failure;
+            }
+            return accept(current, token);
+        }
+    }
+
+    /** One accept attempt against the given login. */
+    Result accept(Login login, byte[] token) throws GSSException {
+        try {
+            return Subject.doAs(login.subject, (PrivilegedExceptionAction<Result>) () -> {
                 GSSContext context = GSSManager.getInstance()
-                        .createContext(acceptorCredential);
+                        .createContext(login.credential);
                 try {
                     byte[] outToken = context.acceptSecContext(token, 0, token.length);
                     boolean established = context.isEstablished();
@@ -131,6 +171,24 @@ public class SpnegoAcceptor {
                     cause.getMessage());
             failure.initCause(cause);
             throw failure;
+        }
+    }
+
+    private synchronized boolean reloginAfterFailure() {
+        long now = System.currentTimeMillis();
+        if (now - lastReloginAt < reloginCooldownMs) {
+            return false;
+        }
+        lastReloginAt = now;
+        try {
+            current = doLogin();
+            LOG.warn("SPNEGO acceptor re-logged in as {} from {} after an accept failure",
+                    principal, keytab);
+            return true;
+        } catch (IOException e) {
+            LOG.error("SPNEGO acceptor re-login as {} from {} failed: {}",
+                    principal, keytab, e.getMessage());
+            return false;
         }
     }
 

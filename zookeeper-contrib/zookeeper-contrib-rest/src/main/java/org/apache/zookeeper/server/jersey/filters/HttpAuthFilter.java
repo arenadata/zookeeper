@@ -52,6 +52,9 @@ public class HttpAuthFilter implements Filter {
     private static final String REALM_CHALLENGE = "Basic realm=\"Restricted\"";
     private static final String NEGOTIATE = "Negotiate";
     private static final String BASIC = "Basic";
+    // compared against for unknown users too, so a failed lookup takes
+    // the constant-time comparison path
+    private static final String UNKNOWN_USER_PASSWORD = "not-a-stored-password";
 
     private final SpnegoAcceptor spnego;
     private final Credentials credentials;
@@ -112,8 +115,12 @@ public class HttpAuthFilter implements Filter {
             }
             // A Kerberos token always establishes in one leg; hand the
             // continuation token back and let the client start over.
-            response.setHeader(CHALLENGE_HEADER, NEGOTIATE + " "
-                    + Base64.getEncoder().encodeToString(result.token));
+            if (result.token != null && result.token.length > 0) {
+                response.setHeader(CHALLENGE_HEADER, NEGOTIATE + " "
+                        + Base64.getEncoder().encodeToString(result.token));
+            } else {
+                response.addHeader(CHALLENGE_HEADER, NEGOTIATE);
+            }
             response.sendError(HttpServletResponse.SC_UNAUTHORIZED);
             return true;
         } catch (GSSException e) {
@@ -132,9 +139,9 @@ public class HttpAuthFilter implements Filter {
             return false;
         }
         String stored = credentials.get(userPass[0]);
-        if (stored == null || !MessageDigest.isEqual(
-                stored.getBytes(StandardCharsets.UTF_8),
-                userPass[1].getBytes(StandardCharsets.UTF_8))) {
+        String expected = stored != null ? stored : UNKNOWN_USER_PASSWORD;
+        if (!MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8),
+                userPass[1].getBytes(StandardCharsets.UTF_8)) || stored == null) {
             return false;
         }
         request.setAttribute(REMOTE_USER, userPass[0]);
