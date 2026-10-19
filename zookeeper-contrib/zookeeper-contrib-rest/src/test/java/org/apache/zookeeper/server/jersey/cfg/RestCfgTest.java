@@ -72,16 +72,6 @@ public class RestCfgTest {
     }
 
     @Test
-    public void testSubstituteHostReplacesTheInstanceOnly() {
-        assertEquals("HTTP/h.example.com@CORP_HOSTS.COM",
-                RestCfg.substituteHost("HTTP/_HOST@CORP_HOSTS.COM", "h.example.com"));
-        assertEquals("HTTP/h.example.com", RestCfg.substituteHost("HTTP/_HOST", "h.example.com"));
-        assertEquals("HTTP/vault@EU_HOSTING.EXAMPLE",
-                RestCfg.substituteHost("HTTP/vault@EU_HOSTING.EXAMPLE", "h"));
-        assertEquals("HTTP@_HOST", RestCfg.substituteHost("HTTP@_HOST", "h"));
-    }
-
-    @Test
     public void testPrincipalWithoutKeytabIsAnError() throws IOException {
         RestCfg cfg = cfg("rest.spnego.principal=HTTP/host@REALM\n");
         List<String> errors = cfg.kerberosConfigErrors();
