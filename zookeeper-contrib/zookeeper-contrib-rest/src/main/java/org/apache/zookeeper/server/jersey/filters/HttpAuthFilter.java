@@ -32,6 +32,7 @@ import javax.servlet.ServletResponse;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
+import org.apache.zookeeper.server.auth.AuthorizationHeader;
 import org.apache.zookeeper.server.auth.SpnegoAcceptor;
 import org.apache.zookeeper.server.jersey.cfg.Credentials;
 import org.ietf.jgss.GSSException;
@@ -74,7 +75,7 @@ public class HttpAuthFilter implements Filter {
 
         String authorization = request.getHeader("Authorization");
 
-        if (spnego != null && matchesScheme(authorization, NEGOTIATE)) {
+        if (spnego != null && AuthorizationHeader.isScheme(authorization, NEGOTIATE)) {
             if (negotiate(request, response, authorization)) {
                 return;
             }
@@ -94,11 +95,8 @@ public class HttpAuthFilter implements Filter {
      */
     private boolean negotiate(HttpServletRequest request,
             HttpServletResponse response, String authorization) throws IOException {
-        byte[] token;
-        try {
-            token = Base64.getDecoder().decode(
-                    authorization.substring(NEGOTIATE.length()).trim());
-        } catch (IllegalArgumentException e) {
+        byte[] token = AuthorizationHeader.schemeCredentials(authorization, NEGOTIATE);
+        if (token == null) {
             refuse(response);
             return true;
         }
@@ -132,7 +130,7 @@ public class HttpAuthFilter implements Filter {
     }
 
     private boolean basic(HttpServletRequest request, String authorization) {
-        if (credentials.isEmpty() || !matchesScheme(authorization, BASIC)) {
+        if (credentials.isEmpty() || !AuthorizationHeader.isScheme(authorization, BASIC)) {
             return false;
         }
         String[] userPass = parseBasicAuthorization(authorization);
@@ -160,18 +158,9 @@ public class HttpAuthFilter implements Filter {
         response.sendError(HttpServletResponse.SC_UNAUTHORIZED);
     }
 
-    private static boolean matchesScheme(String authorization, String scheme) {
-        return authorization != null && authorization.length() > scheme.length()
-                && authorization.regionMatches(true, 0, scheme, 0, scheme.length())
-                && authorization.charAt(scheme.length()) == ' ';
-    }
-
     private static String[] parseBasicAuthorization(String authorization) {
-        byte[] decoded;
-        try {
-            decoded = Base64.getDecoder().decode(
-                    authorization.substring(BASIC.length()).trim());
-        } catch (IllegalArgumentException e) {
+        byte[] decoded = AuthorizationHeader.schemeCredentials(authorization, BASIC);
+        if (decoded == null) {
             return null;
         }
         String userPass = new String(decoded, StandardCharsets.UTF_8);

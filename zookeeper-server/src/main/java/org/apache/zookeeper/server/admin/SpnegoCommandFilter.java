@@ -36,6 +36,7 @@ import javax.servlet.ServletResponse;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import org.apache.zookeeper.common.vault.KerberosVaultAuth;
+import org.apache.zookeeper.server.auth.AuthorizationHeader;
 import org.apache.zookeeper.server.auth.SpnegoAcceptor;
 import org.ietf.jgss.GSSException;
 import org.slf4j.Logger;
@@ -164,15 +165,9 @@ public class SpnegoCommandFilter implements Filter {
 
     private boolean authenticate(HttpServletRequest request, HttpServletResponse response)
             throws IOException {
-        String header = request.getHeader("Authorization");
-        int space = header == null ? -1 : header.indexOf(' ');
-        if (space < 0 || !header.substring(0, space).equalsIgnoreCase(NEGOTIATE)) {
-            return challenge(response);
-        }
-        byte[] token;
-        try {
-            token = Base64.getDecoder().decode(header.substring(space + 1).trim());
-        } catch (IllegalArgumentException e) {
+        byte[] token = AuthorizationHeader.schemeCredentials(
+            request.getHeader("Authorization"), NEGOTIATE);
+        if (token == null) {
             return challenge(response);
         }
         SpnegoAcceptor.Result result;
