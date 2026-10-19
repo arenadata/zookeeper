@@ -2521,6 +2521,35 @@ options are used to configure the [AdminServer](#sc_adminserver).
     The URL for listing and issuing commands relative to the
     root URL.  Defaults to "/commands".
 
+* *admin.spnego.principal* :
+    (Java system property: **zookeeper.admin.spnego.principal**)
+    Kerberos service principal the AdminServer authenticates clients
+    against, for example HTTP/_HOST@EXAMPLE.COM; _HOST is replaced with
+    the canonical hostname of the server. Set together with
+    *admin.spnego.keytab* to require SPNEGO (HTTP Negotiate)
+    authentication for every request to the command URLs. When neither
+    key is set the AdminServer accepts requests without authentication,
+    as before. A partially configured pair, or a keytab that cannot be
+    read, fails server startup.
+
+* *admin.spnego.keytab* :
+    (Java system property: **zookeeper.admin.spnego.keytab**)
+    Path to the keytab file containing the admin service principal.
+    May be the same keytab the server uses for SASL if an HTTP/<host>
+    entry is added to it.
+
+* *admin.spnego.commands* :
+    (Java system property: **zookeeper.admin.spnego.commands**)
+    Comma-separated list of commands accepted while SPNEGO is enabled.
+    Defaults to "ruok,srvr,stat,mntr,conf,isro,wchs,dirs". A value of
+    "*" accepts every command except the mutating ones (stat_reset,
+    connection_stat_reset, observer_connection_stat_reset,
+    set_trace_mask, snapshot and restore), which are never served
+    through the authenticated interface. Note that "*" also admits any
+    command added by newer versions, including sensitive ones such as
+    cons, wchc, wchp, dump, envi and sysp; list commands explicitly
+    when that matters.
+
 <a name="sc_metricsProviders"></a>
 
 ### Metrics Providers
@@ -3073,6 +3102,22 @@ admin.needClientAuth=true
 ```
 
 When enabled, only clients presenting valid certificates trusted by the server will be allowed to connect.
+
+##### Option 4: Require SPNEGO (Kerberos) Authentication
+
+To restrict access to clients authenticating with Kerberos over HTTP Negotiate:
+
+```properties
+admin.spnego.principal=HTTP/_HOST@EXAMPLE.COM
+admin.spnego.keytab=/path/to/http.keytab
+```
+
+Provision an `HTTP/<host>@REALM` principal for every server; the keytab may be
+the server's own keytab with the additional entry. While SPNEGO is enabled, only
+the commands listed in *admin.spnego.commands* are served, and mutating commands
+are never served. Authentication covers the request, not the command result:
+combining SPNEGO with HTTPS (`admin.forceHttps=true`) is recommended when the
+responses travel over an untrusted network.
 
 #### Recommended Secure Configuration
 
