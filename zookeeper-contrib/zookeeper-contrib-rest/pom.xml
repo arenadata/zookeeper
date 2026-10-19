@@ -115,9 +115,34 @@
       <scope>test</scope>
     </dependency>
     <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter-engine</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
       <groupId>org.junit.platform</groupId>
       <artifactId>junit-platform-suite-api</artifactId>
       <version>${junit-platform.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.mockito</groupId>
+      <artifactId>mockito-core</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.kerby</groupId>
+      <artifactId>kerb-core</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.kerby</groupId>
+      <artifactId>kerb-simplekdc</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.kerby</groupId>
+      <artifactId>kerby-config</artifactId>
       <scope>test</scope>
     </dependency>
   </dependencies>
@@ -128,8 +153,21 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <configuration>
-          <!-- ToDo -->
-          <skipTests>true</skipTests>
+          <!-- jersey-json's JAXB injects accessor bytecode at runtime, which the
+               module system of modern JDKs refuses without this open -->
+          <argLine>--add-opens java.base/java.lang=ALL-UNNAMED</argLine>
+          <!-- the legacy suite below needs an externally started ZooKeeper server; excluded until fixed -->
+          <excludes>
+            <exclude>**/jersey/CreateTest.java</exclude>
+            <exclude>**/jersey/DeleteTest.java</exclude>
+            <exclude>**/jersey/ExistsTest.java</exclude>
+            <exclude>**/jersey/GetChildrenTest.java</exclude>
+            <exclude>**/jersey/GetTest.java</exclude>
+            <exclude>**/jersey/RootTest.java</exclude>
+            <exclude>**/jersey/SessionTest.java</exclude>
+            <exclude>**/jersey/SetTest.java</exclude>
+            <exclude>**/jersey/WadlTest.java</exclude>
+          </excludes>
         </configuration>
       </plugin>
     </plugins>
