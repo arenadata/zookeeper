@@ -26,6 +26,7 @@ import java.util.Base64;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Pattern;
 import javax.servlet.Filter;
 import javax.servlet.FilterChain;
 import javax.servlet.FilterConfig;
@@ -72,6 +73,13 @@ public class SpnegoCommandFilter implements Filter {
     private static final String KEYTAB_KEY = "zookeeper.admin.spnego.keytab";
     private static final String COMMANDS_KEY = "zookeeper.admin.spnego.commands";
     private static final String NEGOTIATE = "Negotiate";
+
+    /*
+     * The servlet resolves command names from the decoded path, so anything
+     * outside this set (percent-escapes, path parameters, slashes) can never
+     * match an allowlist entry and must not be passed on.
+     */
+    private static final Pattern COMMAND_NAME = Pattern.compile("[A-Za-z0-9_]+");
 
     private final SpnegoAcceptor acceptor;
     private final Set<String> allowedCommands;
@@ -157,12 +165,13 @@ public class SpnegoCommandFilter implements Filter {
     private boolean authenticate(HttpServletRequest request, HttpServletResponse response)
             throws IOException {
         String header = request.getHeader("Authorization");
-        if (header == null || !header.startsWith(NEGOTIATE + " ")) {
+        int space = header == null ? -1 : header.indexOf(' ');
+        if (space < 0 || !header.substring(0, space).equalsIgnoreCase(NEGOTIATE)) {
             return challenge(response);
         }
         byte[] token;
         try {
-            token = Base64.getDecoder().decode(header.substring(NEGOTIATE.length() + 1));
+            token = Base64.getDecoder().decode(header.substring(space + 1).trim());
         } catch (IllegalArgumentException e) {
             return challenge(response);
         }
@@ -191,7 +200,7 @@ public class SpnegoCommandFilter implements Filter {
     }
 
     private boolean commandAllowed(String command) {
-        if (NEVER.contains(command)) {
+        if (NEVER.contains(command) || !COMMAND_NAME.matcher(command).matches()) {
             return false;
         }
         return allowedCommands.contains("*") || allowedCommands.contains(command);

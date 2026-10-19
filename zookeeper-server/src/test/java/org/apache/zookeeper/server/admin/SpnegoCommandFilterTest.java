@@ -199,6 +199,46 @@ public class SpnegoCommandFilterTest {
     }
 
     @Test
+    public void testEncodedNeverCommandBlockedUnderWildcardAllowlist() throws Exception {
+        SpnegoCommandFilter wildcard = new SpnegoCommandFilter(
+            acceptor, SpnegoCommandFilter.parseCommands("*"), "/commands");
+        when(request.getRequestURI()).thenReturn("/commands/s%72st");
+        stubValidToken();
+
+        wildcard.doFilter(request, response, chain);
+
+        // the servlet decodes s%72st to srst, so the filter must not pass it on
+        verify(response).setStatus(403);
+        verify(chain, never()).doFilter(any(), any());
+    }
+
+    @Test
+    public void testLowercaseSchemeAccepted() throws Exception {
+        stubUri("/commands/mntr");
+        when(request.getHeader("Authorization")).thenReturn("negotiate "
+                + Base64.getEncoder().encodeToString(new byte[]{1}));
+        when(acceptor.accept(any())).thenReturn(
+            new SpnegoAcceptor.Result(true, "user@REALM", null));
+
+        filter.doFilter(request, response, chain);
+
+        verify(chain).doFilter(request, response);
+    }
+
+    @Test
+    public void testExtraWhitespaceBeforeTokenAccepted() throws Exception {
+        stubUri("/commands/mntr");
+        when(request.getHeader("Authorization")).thenReturn("Negotiate  "
+                + Base64.getEncoder().encodeToString(new byte[]{1}));
+        when(acceptor.accept(any())).thenReturn(
+            new SpnegoAcceptor.Result(true, "user@REALM", null));
+
+        filter.doFilter(request, response, chain);
+
+        verify(chain).doFilter(request, response);
+    }
+
+    @Test
     public void testCommandNameWithCustomCommandUrl() {
         SpnegoCommandFilter custom = new SpnegoCommandFilter(
             acceptor, SpnegoCommandFilter.parseCommands("*"), "/adm");

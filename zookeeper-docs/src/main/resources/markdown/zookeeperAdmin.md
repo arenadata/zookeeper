@@ -3119,6 +3119,10 @@ are never served. Authentication covers the request, not the command result:
 combining SPNEGO with HTTPS (`admin.forceHttps=true`) is recommended when the
 responses travel over an untrusted network.
 
+Note that the admin server's `ruok` command reports readiness: it only succeeds
+while the ZooKeeper server is serving requests, unlike the four-letter word
+`ruok`, which merely proves that the client-port front end is alive.
+
 #### Recommended Secure Configuration
 
 For production environments, the following configuration is strongly recommended:
