@@ -32,6 +32,7 @@ import javax.servlet.ServletResponse;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
+import org.apache.zookeeper.server.auth.SpnegoAcceptor;
 import org.apache.zookeeper.server.jersey.cfg.Credentials;
 import org.ietf.jgss.GSSException;
 import org.slf4j.Logger;
