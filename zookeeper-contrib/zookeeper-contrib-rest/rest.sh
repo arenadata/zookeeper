@@ -47,6 +47,13 @@ ZKREST_MAIN=org.apache.zookeeper.server.jersey.RestMain
 ZKREST_CONF=$ZKREST_HOME/conf
 ZKREST_LOG=$ZKREST_HOME/zkrest.log
 
+# jersey-json's JAXB injects accessor bytecode, which the module system of
+# Java 9+ refuses unless java.lang is open to the unnamed module
+JAVA_MAJOR=$(java -version 2>&1 | awk -F'"' '/version/ {split($2, v, "."); if (v[1] == "1") print v[2]; else print v[1]}')
+if [ "$JAVA_MAJOR" -ge 9 ] 2>/dev/null; then
+    JVMFLAGS="--add-opens java.base/java.lang=ALL-UNNAMED $JVMFLAGS"
+fi
+
 CLASSPATH="$ZKREST_CONF:$CLASSPATH"
 
 for i in "$ZKREST_HOME"/lib/*.jar
