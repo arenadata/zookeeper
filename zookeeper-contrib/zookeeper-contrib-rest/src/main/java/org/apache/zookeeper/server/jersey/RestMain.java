@@ -23,13 +23,16 @@ import java.io.IOException;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.Files;
+import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.zookeeper.server.jersey.cfg.Credentials;
 import org.apache.zookeeper.server.jersey.cfg.Endpoint;
 import org.apache.zookeeper.server.jersey.cfg.RestCfg;
-import org.apache.zookeeper.server.jersey.filters.HTTPBasicAuth;
+import org.apache.zookeeper.server.jersey.cfg.ZkClientJaasConfiguration;
+import org.apache.zookeeper.server.jersey.filters.HttpAuthFilter;
+import org.apache.zookeeper.server.jersey.filters.SpnegoAcceptor;
 
 import com.sun.grizzly.SSLConfig;
 import com.sun.grizzly.http.embed.GrizzlyWebServer;
@@ -48,10 +51,19 @@ public class RestMain {
 
    public RestMain(RestCfg cfg) {
        this.cfg = cfg;
+       if (cfg.getZkPrincipal() != null) {
+           ZkClientJaasConfiguration.install(cfg.getZkPrincipal(), cfg.getZkKeytab());
+       }
    }
 
    public void start() throws IOException {
        System.out.println("Starting grizzly ...");
+
+       SpnegoAcceptor spnego = null;
+       if (cfg.getSpnegoPrincipal() != null) {
+           spnego = SpnegoAcceptor.create(cfg.getSpnegoPrincipal(),
+                   cfg.getSpnegoKeytab());
+       }
 
        boolean useSSL = cfg.useSSL();
        String zkRestResourcesTempPath = Files.createTempDirectory("zkRestResourcesTempPath").toFile().getCanonicalPath();
@@ -60,7 +72,7 @@ public class RestMain {
 
        for (Endpoint e : cfg.getEndpoints()) {
            ZooKeeperService.mapContext(e.getContext(), e);
-           gws.addGrizzlyAdapter(createJerseyAdapter(e), new String[] { e
+           gws.addGrizzlyAdapter(createJerseyAdapter(e, spnego), new String[] { e
                    .getContext() });
        }
        
@@ -94,7 +106,7 @@ public class RestMain {
        ZooKeeperService.closeAll();
    }
 
-   private ServletAdapter createJerseyAdapter(Endpoint e) {
+   private ServletAdapter createJerseyAdapter(Endpoint e, SpnegoAcceptor spnego) {
        ServletAdapter jersey = new ServletAdapter();
 
        jersey.setServletInstance(new ServletContainer());
@@ -104,9 +116,9 @@ public class RestMain {
 
        Credentials c = Credentials.join(e.getCredentials(), cfg
                .getCredentials());
-       if (!c.isEmpty()) {
-           jersey.addFilter(new HTTPBasicAuth(c), e.getContext()
-                   + "-basic-auth", null);
+       if (spnego != null || !c.isEmpty()) {
+           jersey.addFilter(new HttpAuthFilter(spnego, c), e.getContext()
+                   + "-auth", null);
        }
 
        return jersey;
@@ -118,6 +130,14 @@ public class RestMain {
     */
    public static void main(String[] args) throws Exception {
        RestCfg cfg = new RestCfg("rest.properties");
+
+       List<String> configErrors = cfg.kerberosConfigErrors();
+       if (!configErrors.isEmpty()) {
+           for (String error : configErrors) {
+               LOG.error(error);
+           }
+           System.exit(2);
+       }
 
        final RestMain main = new RestMain(cfg);
        main.start();
