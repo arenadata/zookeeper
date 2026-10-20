@@ -2057,12 +2057,14 @@ it is.
 | ssl.keyStore.password, ssl.trustStore.password | client TLS, on servers and on clients |
 | ssl.quorum.keyStore.password, ssl.quorum.trustStore.password | quorum TLS and the AdminServer |
 | metricsProvider.ssl.keyStore.password, metricsProvider.ssl.keyStore.keyPassword, metricsProvider.ssl.trustStore.password | the Prometheus metrics endpoint |
+| rest.ssl.jks.pass | the JKS keystore of the contrib REST gateway, whose rest.properties holds the flat value; read only while rest.ssl is on, and the gateway needs jackson-databind on its classpath |
 | SASLAuthenticationProvider.superPassword | the SASL super user |
 | DigestAuthenticationProvider.superDigest | the digest super user |
 | tokenAuth.secret | the static delegation token master key, used as UTF-8 bytes in place of *tokenAuth.secretFile*; a binary key file has no such text form, so moving it to the provider means a new key, which ends the tokens signed with the old one |
 
 The server reads all of these keys when it starts, so it does not start while
-the secrets engine is unreachable, and keeps them in memory. A certificate
+the secrets engine is unreachable, and keeps them in memory; the REST gateway
+reads its key only when it starts with rest.ssl on. A certificate
 reload reads the TLS store passwords again and keeps the old ones if the engine
 cannot be reached, after the retries of every request; the other keys change on
 restart. A client reads its TLS
