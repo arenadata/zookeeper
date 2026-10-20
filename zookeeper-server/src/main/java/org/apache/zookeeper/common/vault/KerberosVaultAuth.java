@@ -41,7 +41,7 @@ import org.slf4j.LoggerFactory;
  * token travels in the Authorization header, which the auth mount must pass through
  * ({@code passthrough_request_headers}).
  */
-final class KerberosVaultAuth implements VaultAuthMethod {
+public final class KerberosVaultAuth implements VaultAuthMethod {
 
     private static final Logger LOG = LoggerFactory.getLogger(KerberosVaultAuth.class);
 
@@ -79,7 +79,7 @@ final class KerberosVaultAuth implements VaultAuthMethod {
      * Replaces an instance of {@code _HOST} in {@code primary/instance[@REALM]} with the host, as
      * Hadoop does.
      */
-    static String replaceHost(String principal, String host) {
+    public static String replaceHost(String principal, String host) {
         int slash = principal.indexOf('/');
         if (slash < 0) {
             return principal;

@@ -16,14 +16,12 @@
  * limitations under the License.
  */
 
-package org.apache.zookeeper.server.jersey.filters;
+package org.apache.zookeeper.server.auth;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-
 import java.io.IOException;
-
 import org.ietf.jgss.GSSException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

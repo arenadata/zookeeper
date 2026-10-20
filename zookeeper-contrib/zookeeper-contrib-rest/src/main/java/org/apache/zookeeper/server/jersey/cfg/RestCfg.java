@@ -30,9 +30,9 @@ import java.util.Locale;
 import java.util.Properties;
 import java.util.Set;
 
-public class RestCfg {
+import org.apache.zookeeper.common.vault.KerberosVaultAuth;
 
-   private static final String HOSTNAME_PATTERN = "_HOST";
+public class RestCfg {
 
    private Properties cfg = new Properties();
 
@@ -186,28 +186,9 @@ public class RestCfg {
        try {
            String host = InetAddress.getLocalHost().getCanonicalHostName()
                    .toLowerCase(Locale.ROOT);
-           return substituteHost(principal, host);
+           return KerberosVaultAuth.replaceHost(principal, host);
        } catch (UnknownHostException e) {
            return principal;
        }
-   }
-
-   /**
-    * Replaces an instance of {@code _HOST} in {@code primary/instance[@REALM]}
-    * with the host, as Hadoop does.
-    */
-   public static String substituteHost(String principal, String host) {
-       int slash = principal.indexOf('/');
-       if (slash < 0) {
-           return principal;
-       }
-       int at = principal.indexOf('@', slash);
-       String instance = at < 0 ? principal.substring(slash + 1)
-               : principal.substring(slash + 1, at);
-       if (!instance.equals(HOSTNAME_PATTERN)) {
-           return principal;
-       }
-       return principal.substring(0, slash + 1) + host
-               + (at < 0 ? "" : principal.substring(at));
    }
 }

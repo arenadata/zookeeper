@@ -21,10 +21,12 @@ package org.apache.zookeeper.server.admin;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
 import java.security.KeyStore;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import javax.servlet.DispatcherType;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
@@ -44,6 +46,7 @@ import org.eclipse.jetty.server.SecureRequestCustomizer;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
 import org.eclipse.jetty.server.SslConnectionFactory;
+import org.eclipse.jetty.servlet.FilterHolder;
 import org.eclipse.jetty.servlet.ServletContextHandler;
 import org.eclipse.jetty.servlet.ServletHolder;
 import org.eclipse.jetty.util.security.Constraint;
@@ -194,6 +197,13 @@ public class JettyAdminServer implements AdminServer {
         server.setHandler(context);
 
         context.addServlet(new ServletHolder(new CommandServlet()), commandUrl + "/*");
+
+        SpnegoCommandFilter spnego = SpnegoCommandFilter.createIfConfigured(commandUrl);
+        if (spnego != null) {
+            context.addFilter(new FilterHolder(spnego), commandUrl + "/*",
+                EnumSet.of(DispatcherType.REQUEST));
+            LOG.info("Admin server SPNEGO enabled");
+        }
     }
 
     /**

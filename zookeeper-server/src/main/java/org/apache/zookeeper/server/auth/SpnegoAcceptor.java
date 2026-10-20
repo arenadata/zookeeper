@@ -16,20 +16,18 @@
  * limitations under the License.
  */
 
-package org.apache.zookeeper.server.jersey.filters;
+package org.apache.zookeeper.server.auth;
 
 import java.io.IOException;
 import java.security.PrivilegedActionException;
 import java.security.PrivilegedExceptionAction;
 import java.util.HashMap;
 import java.util.Map;
-
 import javax.security.auth.Subject;
 import javax.security.auth.login.AppConfigurationEntry;
 import javax.security.auth.login.Configuration;
 import javax.security.auth.login.LoginContext;
 import javax.security.auth.login.LoginException;
-
 import org.ietf.jgss.GSSContext;
 import org.ietf.jgss.GSSCredential;
 import org.ietf.jgss.GSSException;
@@ -39,7 +37,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * SPNEGO acceptor for the service principal of the gateway. Logs in from a
+ * SPNEGO acceptor for a service principal. Logs in from a
  * keytab and validates one Negotiate token per {@link #accept(byte[])}
  * call; a Kerberos token always establishes the context in a single leg, so
  * no state is kept between calls. A failed accept re-logs in from the

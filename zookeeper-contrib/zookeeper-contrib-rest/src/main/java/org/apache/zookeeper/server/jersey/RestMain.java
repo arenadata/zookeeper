@@ -32,7 +32,7 @@ import org.apache.zookeeper.server.jersey.cfg.Endpoint;
 import org.apache.zookeeper.server.jersey.cfg.RestCfg;
 import org.apache.zookeeper.server.jersey.cfg.ZkClientJaasConfiguration;
 import org.apache.zookeeper.server.jersey.filters.HttpAuthFilter;
-import org.apache.zookeeper.server.jersey.filters.SpnegoAcceptor;
+import org.apache.zookeeper.server.auth.SpnegoAcceptor;
 
 import com.sun.grizzly.SSLConfig;
 import com.sun.grizzly.http.embed.GrizzlyWebServer;
