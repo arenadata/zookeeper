@@ -27,6 +27,7 @@ import java.io.IOException;
 import javax.security.auth.login.AppConfigurationEntry;
 import javax.security.auth.login.Configuration;
 
+import org.apache.zookeeper.common.vault.VaultCredentialProvider;
 import org.apache.zookeeper.server.jersey.cfg.RestCfg;
 import org.junit.jupiter.api.Test;
 
@@ -51,6 +52,7 @@ public class RestMainZkJaasTest {
             assertEquals("/etc/zk-rest.keytab", client[0].getOptions().get("keyTab"));
         } finally {
             Configuration.setConfiguration(previous);
+            System.clearProperty(VaultCredentialProvider.KERBEROS_LOGIN_CONTEXT);
         }
     }
 

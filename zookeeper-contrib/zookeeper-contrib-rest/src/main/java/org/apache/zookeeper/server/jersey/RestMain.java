@@ -19,6 +19,7 @@
 package org.apache.zookeeper.server.jersey;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.net.URISyntaxException;
 import java.net.URL;
@@ -125,11 +126,29 @@ public class RestMain {
    }
 
    /**
+    * The configuration file named by the first argument, else the
+    * rest.properties classpath resource.
+    */
+   static RestCfg loadConfig(String[] args) throws IOException {
+       if (args.length > 0) {
+           return new RestCfg(new FileInputStream(args[0]));
+       }
+       return new RestCfg("rest.properties");
+   }
+
+   /**
     * The entry point for starting the server
-    * 
+    *
     */
    public static void main(String[] args) throws Exception {
-       RestCfg cfg = new RestCfg("rest.properties");
+       RestCfg cfg;
+       try {
+           cfg = loadConfig(args);
+       } catch (IOException e) {
+           LOG.error("Unable to read the REST gateway configuration", e);
+           System.exit(2);
+           return;
+       }
 
        List<String> configErrors = cfg.kerberosConfigErrors();
        if (!configErrors.isEmpty()) {

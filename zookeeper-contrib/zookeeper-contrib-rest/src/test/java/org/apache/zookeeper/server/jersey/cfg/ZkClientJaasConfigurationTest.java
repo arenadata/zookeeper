@@ -28,6 +28,7 @@ import javax.security.auth.login.AppConfigurationEntry;
 import javax.security.auth.login.Configuration;
 
 import org.apache.zookeeper.client.ZKClientConfig;
+import org.apache.zookeeper.common.vault.VaultCredentialProvider;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -38,8 +39,9 @@ public class ZkClientJaasConfigurationTest {
     private final String clientSection = ZKClientConfig.LOGIN_CONTEXT_NAME_KEY_DEFAULT;
 
     @AfterEach
-    public void clearClientSectionOverride() {
+    public void clearSectionOverrides() {
         System.clearProperty(ZKClientConfig.LOGIN_CONTEXT_NAME_KEY);
+        System.clearProperty(VaultCredentialProvider.KERBEROS_LOGIN_CONTEXT);
     }
 
     private ZkClientJaasConfiguration wrapper(Configuration previous) {
@@ -116,6 +118,31 @@ public class ZkClientJaasConfigurationTest {
             assertEquals(KRB5_LOGIN_MODULE, client[0].getLoginModuleName());
             assertEquals("some.Module", Configuration.getConfiguration()
                     .getAppConfigurationEntry("External")[0].getLoginModuleName());
+        } finally {
+            Configuration.setConfiguration(previous);
+        }
+    }
+
+    @Test
+    public void testInstallDefaultsTheVaultLoginContextToTheClientSection() {
+        Configuration previous = Configuration.getConfiguration();
+        try {
+            ZkClientJaasConfiguration.install("zk-rest/host@REALM", "/etc/keytab");
+            assertEquals(clientSection,
+                    System.getProperty(VaultCredentialProvider.KERBEROS_LOGIN_CONTEXT));
+        } finally {
+            Configuration.setConfiguration(previous);
+        }
+    }
+
+    @Test
+    public void testInstallKeepsAnExplicitVaultLoginContext() {
+        Configuration previous = Configuration.getConfiguration();
+        System.setProperty(VaultCredentialProvider.KERBEROS_LOGIN_CONTEXT, "VaultSection");
+        try {
+            ZkClientJaasConfiguration.install("zk-rest/host@REALM", "/etc/keytab");
+            assertEquals("VaultSection",
+                    System.getProperty(VaultCredentialProvider.KERBEROS_LOGIN_CONTEXT));
         } finally {
             Configuration.setConfiguration(previous);
         }
