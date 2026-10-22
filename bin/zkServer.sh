@@ -291,7 +291,7 @@ status)
     fi
     echo "Client port found: $clientPort. Client address: $clientPortAddress. Client SSL: $isSSL."
     STAT=`"$JAVA" "-Dzookeeper.log.dir=${ZOO_LOG_DIR}" "-Dzookeeper.log.file=${ZOO_LOG_FILE}" \
-          -cp "$CLASSPATH" $CLIENT_JVMFLAGS $JVMFLAGS org.apache.zookeeper.client.FourLetterWordMain \
+          -cp "$CLASSPATH" $CLIENT_JVMFLAGS org.apache.zookeeper.client.FourLetterWordMain \
           $clientPortAddress $clientPort srvr $isSSL 2> /dev/null    \
           | $GREP Mode`
     if [ "x$STAT" = "x" ]
