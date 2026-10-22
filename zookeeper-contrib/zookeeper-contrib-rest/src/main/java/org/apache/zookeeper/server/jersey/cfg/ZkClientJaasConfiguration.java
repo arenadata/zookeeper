@@ -25,6 +25,7 @@ import javax.security.auth.login.AppConfigurationEntry;
 import javax.security.auth.login.Configuration;
 
 import org.apache.zookeeper.client.ZKClientConfig;
+import org.apache.zookeeper.common.vault.VaultCredentialProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -56,7 +57,9 @@ public class ZkClientJaasConfiguration extends Configuration {
 
     /**
      * Installs the wrapper as the JVM-wide configuration; the ZooKeeper
-     * clients of the gateway pick it up on their first SASL login.
+     * clients of the gateway pick it up on their first SASL login. The Vault
+     * Kerberos login is defaulted to the client section, so it reuses the
+     * gateway's identity unless a section is configured for Vault.
      */
     public static void install(String principal, String keytab) {
         ZkClientJaasConfiguration wrapper = new ZkClientJaasConfiguration(
@@ -64,6 +67,10 @@ public class ZkClientJaasConfiguration extends Configuration {
         if (wrapper.previous.getAppConfigurationEntry(wrapper.clientSection) != null) {
             LOG.warn("Overriding JAAS section {} of the previous configuration "
                     + "with rest.zk.principal {}", wrapper.clientSection, principal);
+        }
+        if (System.getProperty(VaultCredentialProvider.KERBEROS_LOGIN_CONTEXT) == null) {
+            System.setProperty(VaultCredentialProvider.KERBEROS_LOGIN_CONTEXT,
+                    wrapper.clientSection);
         }
         Configuration.setConfiguration(wrapper);
     }

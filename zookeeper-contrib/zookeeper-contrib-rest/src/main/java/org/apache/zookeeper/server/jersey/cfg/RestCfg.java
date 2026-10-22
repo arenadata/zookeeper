@@ -30,9 +30,12 @@ import java.util.Locale;
 import java.util.Properties;
 import java.util.Set;
 
+import org.apache.zookeeper.common.SecretUtils;
 import org.apache.zookeeper.common.vault.KerberosVaultAuth;
 
 public class RestCfg {
+
+   private static final String JKS_PASS_KEY = "rest.ssl.jks.pass";
 
    private Properties cfg = new Properties();
 
@@ -112,8 +115,22 @@ public class RestCfg {
        return cfg.getProperty("rest.ssl.jks", def);
    }
 
+   /**
+    * The JKS password: the credential provider's secret stored under the
+    * alias {@code rest.ssl.jks.pass}, else the property value.
+    *
+    * @throws IllegalStateException when the credential provider cannot be read
+    */
    public String getJKSPassword() {
-       return cfg.getProperty("rest.ssl.jks.pass");
+       char[] credential;
+       try {
+           credential = SecretUtils.getCredential(null, JKS_PASS_KEY);
+       } catch (IOException e) {
+           throw new IllegalStateException("Failed to read " + JKS_PASS_KEY
+               + " from the credential provider", e);
+       }
+       return credential == null ? cfg.getProperty(JKS_PASS_KEY)
+               : String.valueOf(credential);
    }
 
    /**

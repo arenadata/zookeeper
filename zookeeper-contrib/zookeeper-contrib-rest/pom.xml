@@ -64,6 +64,13 @@
       <type>test-jar</type>
       <scope>test</scope>
     </dependency>
+    <!-- jackson-databind is provided in zookeeper-server; SecretUtils and the
+         MockVault test double need it here -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <scope>test</scope>
+    </dependency>
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-api</artifactId>
