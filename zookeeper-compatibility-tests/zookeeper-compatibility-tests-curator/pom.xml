@@ -22,7 +22,7 @@
     <parent>
         <groupId>org.apache.zookeeper</groupId>
         <artifactId>zookeeper-compatibility-tests</artifactId>
-        <version>3.9.5.3-4.5.0-1</version>
+        <version>3.9.5.3-4.5.0-2</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -32,7 +32,7 @@
     <description>Module for Apache Curator compatibility tests</description>
 
     <properties>
-        <apache-curator-version>5.0.0</apache-curator-version>
+        <apache-curator-version>5.9.0.3-4.5.0-2</apache-curator-version>
     </properties>
 
     <dependencies>
